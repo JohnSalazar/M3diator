@@ -20,10 +20,6 @@ Install the necessary packages using the .NET CLI:
 ```bash
 # Core M3diator library (interfaces and implementation)
 dotnet add package M3diator
-
-
-# Dependency Injection extensions for easy setup
-dotnet add package M3diator.DependencyInjection
 ````
 
 ### Registering with `IServiceCollection`

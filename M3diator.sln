@@ -4,7 +4,7 @@ VisualStudioVersion = 17.13.35919.96
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "M3diator", "src\M3diator\M3diator.csproj", "{D2C54D60-D273-4D75-B5A6-259EC9902496}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "M3diator.DependencyInjection", "src\M3diator.DependencyInjection\M3diator.DependencyInjection.csproj", "{9ED44507-CDF8-DA91-78F3-93EBC16EC5E9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "M3diator.Abstractions", "src\M3diator.Abstractions\M3diator.Abstractions.csproj", "{C617FC6B-EB06-40EF-BB07-28A7A93028AB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -16,10 +16,10 @@ Global
 		{D2C54D60-D273-4D75-B5A6-259EC9902496}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D2C54D60-D273-4D75-B5A6-259EC9902496}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D2C54D60-D273-4D75-B5A6-259EC9902496}.Release|Any CPU.Build.0 = Release|Any CPU
-		{9ED44507-CDF8-DA91-78F3-93EBC16EC5E9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{9ED44507-CDF8-DA91-78F3-93EBC16EC5E9}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{9ED44507-CDF8-DA91-78F3-93EBC16EC5E9}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{9ED44507-CDF8-DA91-78F3-93EBC16EC5E9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C617FC6B-EB06-40EF-BB07-28A7A93028AB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C617FC6B-EB06-40EF-BB07-28A7A93028AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C617FC6B-EB06-40EF-BB07-28A7A93028AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C617FC6B-EB06-40EF-BB07-28A7A93028AB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
