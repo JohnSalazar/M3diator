@@ -1,6 +1,6 @@
 # M3diator
 
-[![NuGet Version](https://img.shields.io/nuget/v/M3diator.svg?style=flat-square)](https://www.nuget.org/packages/M3diator/) [![Build Status](https://img.shields.io/azure-devops/build/your-org/your-project/your-build-definition-id.svg?style=flat-square)](link-to-your-build-pipeline) [![License](https://img.shields.io/github/license/your-github-username/M3diator.svg?style=flat-square)](LICENSE) A lightweight, high-performance Mediator pattern implementation in .NET, inspired by [MediatR](https://github.com/jbogard/MediatR).
+[![NuGet Version](https://img.shields.io/nuget/v/M3diator?label=M3diator&logo=nuget)](https://www.nuget.org/packages/M3diator/) [![NuGet Version](https://img.shields.io/nuget/v/M3diator.DependencyInjection?label=M3diator.DI&logo=nuget)](https://www.nuget.org/packages/M3diator.DependencyInjection/) A lightweight, high-performance Mediator pattern implementation in .NET, inspired by [MediatR](https://github.com/jbogard/MediatR).
 
 ## What is the Mediator Pattern?
 
