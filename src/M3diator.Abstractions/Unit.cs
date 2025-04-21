@@ -12,12 +12,12 @@ public readonly struct Unit : IEquatable<Unit>, IComparable<Unit>, IComparable
     /// <summary>
     /// Gets the single value of the <see cref="Unit"/> type.
     /// </summary>
-    public static readonly Unit Value = default;
+    public static readonly Unit Value = new();
 
     /// <summary>
     /// Gets a completed task that returns the <see cref="Unit"/> value.
     /// </summary>
-    public static Task<Unit> Task { get; } = System.Threading.Tasks.Task.FromResult(Value);
+    public static Task<Unit> Task { get; } = System.Threading.Tasks.Task.FromResult(Unit.Value);
 
     /// <summary>
     /// Compares the current instance with another object of the same type and returns an integer that indicates whether the current instance precedes, follows, or occurs in the same position in the sort order as the other object.

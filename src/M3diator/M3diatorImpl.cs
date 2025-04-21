@@ -1,112 +1,214 @@
 ﻿using M3diator.Internal;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
+using System.Reflection;
 
 namespace M3diator;
 
 /// <summary>
-/// The M3diator class is responsible for handling requests and notifications.
+/// Default implementation of IMediator, ISender and IPublisher.
+/// Handles request sending, notification publishing, and pipeline behavior execution.
+/// Implements caching for handler resolution to improve performance.
 /// </summary>
-/// <remarks>
-/// Initializes a new instance of the <see cref="M3diator"/> class.
-/// </remarks>
-/// <param name="serviceProvider">The service provider.</param>
-/// <exception cref="ArgumentNullException">Thrown when serviceProvider is null.</exception>
-public class M3diatorImpl(IServiceProvider serviceProvider) : IMediator
+public class M3diatorImpl : IMediator
 {
-    private readonly IServiceProvider _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
-    private static readonly ConcurrentDictionary<Type, RequestHandlerWrapperBase> _requestHandlers = new();
-    private static readonly ConcurrentDictionary<Type, NotificationHandlerWrapper> _notificationHandlers = new();
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ConcurrentDictionary<Type, RequestHandlerBase> _requestHandlers = new();
+    private readonly ConcurrentDictionary<Type, List<NotificationHandlerWrapperBase>> _notificationHandlers = new();
+
+    private static readonly ConcurrentDictionary<Type, MethodInfo> SendInternalMethodCache = new();
 
     /// <summary>
-    /// Sends a request and returns a response.
+    /// Initializes a new instance of the <see cref="M3diatorImpl"/> class.
     /// </summary>
-    /// <typeparam name="TResponse">The type of the response.</typeparam>
-    /// <param name="request">The request.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task that represents the asynchronous operation. The task result contains the response.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when request is null.</exception>
+    /// <param name="serviceProvider">The service provider used to resolve dependencies.</param>
+    public M3diatorImpl(IServiceProvider serviceProvider)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+        _serviceProvider = serviceProvider;
+    }
+
+    /// <inheritdoc />
     public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var requestType = request.GetType();
-        var handler = (RequestHandlerWrapper<TResponse>)_requestHandlers.GetOrAdd(requestType,
-            static t => (RequestHandlerWrapperBase)Activator.CreateInstance(typeof(RequestHandlerWrapperImpl<,>).MakeGenericType(t, typeof(TResponse)))!);
-        return handler.Handle(request, _serviceProvider, cancellationToken);
+        return SendInternal(request, cancellationToken);
     }
 
     /// <summary>
-    /// Sends a request and returns a response.
+    /// Sends a request without a response (uses Unit).
     /// </summary>
-    /// <param name="request">The request.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task that represents the asynchronous operation. The task result contains the response.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when request is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when request does not implement IRequest or IRequest&lt;TResponse&gt;.</exception>
+    /// <param name="request">The request object implementing IRequest (implies IRequest&lt;Unit&gt;).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Task.</returns>
+    public Task Send(IRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return SendInternal<Unit>(request, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<object?> Send(object request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         var requestType = request.GetType();
 
-        var requestInterfaceType = requestType.GetInterfaces().FirstOrDefault(IsRequestInterface);
+        var requestInterface = requestType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
 
-        if (requestInterfaceType == null)
+        Type responseType;
+        if (requestInterface == null)
         {
-            throw new ArgumentException($"{requestType.Name} does not implement IRequest or IRequest<TResponse>.", nameof(request));
+            if (request is IRequest)
+            {
+                responseType = typeof(Unit);
+            }
+            else
+            {
+                throw new ArgumentException($"Object '{requestType.FullName}' does not implement IRequest or IRequest<TResponse>.", nameof(request));
+            }
+        }
+        else
+        {
+            responseType = requestInterface.GetGenericArguments()[0];
         }
 
-        var responseType = requestInterfaceType.IsGenericType ? requestInterfaceType.GetGenericArguments()[0] : typeof(Unit);
+        static MethodInfo GetSendInternalMethod(Type respType) =>
+            typeof(M3diatorImpl)
+                .GetMethod(nameof(SendInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
+                .MakeGenericMethod(respType);
 
-        var handler = _requestHandlers.GetOrAdd(requestType,
-             t =>
-             {
-                 var wrapperType = typeof(RequestHandlerWrapperImpl<,>).MakeGenericType(t, responseType);
-                 return (RequestHandlerWrapperBase)Activator.CreateInstance(wrapperType)!;
-             });
+        var sendInternalMethod = SendInternalMethodCache.GetOrAdd(responseType, GetSendInternalMethod);
 
-        return handler.Handle(request, _serviceProvider, cancellationToken);
+        var taskResult = sendInternalMethod.Invoke(this, new object[] { request, cancellationToken });
+
+        return HandleTaskResult(taskResult, responseType);
     }
 
-    /// <summary>
-    /// Determines whether the specified type is a request interface.
-    /// </summary>
-    /// <param name="type">The type.</param>
-    /// <returns><c>true</c> if the specified type is a request interface; otherwise, <c>false</c>.</returns>
-    private static bool IsRequestInterface(Type type) =>
-        (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IRequest<>)) || type == typeof(IRequest);
+    private static async Task<object?> HandleTaskResult(object? taskObject, Type responseType)
+    {
+        if (taskObject is null) return null;
+        if (taskObject is not Task task) throw new InvalidOperationException("Expected a Task object.");
 
-    /// <summary>
-    /// Publishes a notification.
-    /// </summary>
-    /// <param name="notification">The notification.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when notification is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when notification does not implement INotification.</exception>
+        await task.ConfigureAwait(false);
+
+        if (responseType == typeof(Unit))
+        {
+            return Unit.Value;
+        }
+        else
+        {
+            try
+            {
+                var resultProperty = task.GetType().GetProperty("Result");
+                if (resultProperty == null)
+                {
+                    throw new InvalidOperationException($"Task type {task.GetType().FullName} did not contain a 'Result' property for response type {responseType.Name}.");
+                }
+                return resultProperty.GetValue(task);
+            }
+            catch (TargetInvocationException ex)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException ?? ex).Throw();
+                return null;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to get result from task for response type {responseType.Name}.", ex);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
+        where TNotification : INotification
+    {
+        ArgumentNullException.ThrowIfNull(notification);
+        return PublishInternal(notification, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task Publish(object notification, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(notification);
 
-        if (notification is not INotification)
+        if (notification is not INotification iNotification)
         {
-            throw new ArgumentException($"{notification.GetType().Name} does not implement INotification", nameof(notification));
+            throw new ArgumentException($"Object '{notification.GetType().FullName}' does not implement INotification.", nameof(notification));
         }
-
-        var notificationType = notification.GetType();
-        var handler = _notificationHandlers.GetOrAdd(notificationType,
-           static t => (NotificationHandlerWrapper)Activator.CreateInstance(typeof(NotificationHandlerWrapperImpl<>).MakeGenericType(t))!);
-
-        return handler.Handle(notification, _serviceProvider, cancellationToken);
+        return PublishInternal(iNotification, cancellationToken);
     }
 
-    /// <summary>
-    /// Publishes a notification.
-    /// </summary>
-    /// <typeparam name="TNotification">The type of the notification.</typeparam>
-    /// <param name="notification">The notification.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification
+    private async Task<TResponse> SendInternal<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
     {
-        return Publish((object)notification, cancellationToken);
+        var requestType = request.GetType();
+
+        var handler = _requestHandlers.GetOrAdd(requestType, static (reqType, sp) =>
+        {
+            var handlerServiceType = typeof(IRequestHandler<,>).MakeGenericType(reqType, typeof(TResponse));
+            var handlerInstance = sp.GetRequiredService(handlerServiceType);
+            var wrapperType = typeof(RequestHandlerWrapperImpl<,>).MakeGenericType(reqType, typeof(TResponse));
+            var wrapper = (RequestHandlerBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
+            return wrapper;
+        }, _serviceProvider);
+
+        RequestHandlerDelegate<TResponse> handlerDelegate = async () =>
+        {
+            object? result = await handler.Handle(request, cancellationToken).ConfigureAwait(false);
+            if (typeof(TResponse) == typeof(Unit)) { return default!; }
+            return (TResponse)result!;
+        };
+
+        var behaviorServiceType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(TResponse));
+        var resolvedBehaviors = _serviceProvider.GetServices(behaviorServiceType).Reverse();
+
+        RequestHandlerDelegate<TResponse> pipeline = handlerDelegate;
+        foreach (var behaviorObj in resolvedBehaviors)
+        {
+            if (behaviorObj == null) continue;
+
+            var nextDelegate = pipeline;
+
+            pipeline = () => ((dynamic)behaviorObj).Handle((dynamic)request, nextDelegate, cancellationToken);
+        }
+
+        return await pipeline().ConfigureAwait(false);
+    }
+
+
+    private async Task PublishInternal(INotification notification, CancellationToken cancellationToken)
+    {
+        var notificationType = notification.GetType();
+        var handlers = _notificationHandlers.GetOrAdd(notificationType, static (notifType, sp) =>
+        {
+            var handlerServiceType = typeof(INotificationHandler<>).MakeGenericType(notifType);
+            var wrapperType = typeof(NotificationHandlerWrapperImpl<>).MakeGenericType(notifType);
+            var handlerInstances = sp.GetServices(handlerServiceType);
+            var wrappers = new List<NotificationHandlerWrapperBase>();
+            foreach (var handlerInstance in handlerInstances)
+            {
+                if (handlerInstance != null)
+                {
+                    var wrapper = (NotificationHandlerWrapperBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
+                    wrappers.Add(wrapper);
+                }
+            }
+            return wrappers;
+        }, _serviceProvider);
+
+        if (!handlers.Any()) { return; }
+
+        List<Exception>? exceptions = null;
+        foreach (var handler in handlers)
+        {
+            try { await handler.Handle(notification, cancellationToken).ConfigureAwait(false); }
+            catch (Exception ex) { exceptions ??= new List<Exception>(); exceptions.Add(ex); }
+        }
+
+        if (exceptions != null && exceptions.Count > 0)
+        {
+            throw new AggregateException($"One or more errors occurred while publishing notification '{notificationType.FullName}'", exceptions);
+        }
     }
 }

@@ -7,7 +7,7 @@
     <PackageId>M3diator</PackageId>    
     <AssemblyName>M3diator</AssemblyName>
     <RootNamespace>M3diator</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>Joao Salazar</Authors>
     <Description>Implementation of the Mediator pattern</Description>
     <PackageTags>mediator;m3diator;pattern;cqrs</PackageTags>
@@ -34,6 +34,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.1.1" />
+    <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="9.0.4" />
   </ItemGroup>
 
   <ItemGroup>
