@@ -17,6 +17,7 @@ internal sealed class HandlerRegister
     private static readonly Type RequestHandlerInterface = typeof(IRequestHandler<,>);
     private static readonly Type NotificationHandlerInterface = typeof(INotificationHandler<>);
     private static readonly Type PipelineBehaviorInterface = typeof(IPipelineBehavior<,>);
+    private static readonly Type StreamRequestHandlerInterface = typeof(IStreamRequestHandler<,>);
 
     public HandlerRegister(IServiceCollection services, M3diatorServiceConfiguration config)
     {
@@ -78,6 +79,10 @@ internal sealed class HandlerRegister
                 typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
             }
             else if (genericTypeDef == PipelineBehaviorInterface)
+            {
+                typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
+            }
+            else if (genericTypeDef == StreamRequestHandlerInterface)
             {
                 typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
             }

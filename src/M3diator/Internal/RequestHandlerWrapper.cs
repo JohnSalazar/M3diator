@@ -36,12 +36,8 @@ internal sealed class RequestHandlerWrapperImpl<TRequest, TResponse>(IRequestHan
     /// <returns>A task representing the asynchronous operation, containing the response object.</returns>
     internal override async Task<object?> Handle(object requestObject, CancellationToken cancellationToken)
     {
-        // Cast the request and call the strongly-typed inner handler.
-        // Using ConfigureAwait(false) as this is library code.
         var result = await _inner.Handle((TRequest)requestObject, cancellationToken).ConfigureAwait(false);
 
-        // For void requests (TResponse is Unit), the result might be the default Unit struct.
-        // Return it as object?.
         return result;
     }
 }

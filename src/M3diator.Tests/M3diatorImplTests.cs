@@ -390,6 +390,118 @@ public class M3diatorImplTests
         mockHandler.Verify(h => h.Handle(It.IsAny<SpyNotification>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    [Fact]
+    public async Task CreateStream_WhenHandlerExists_ShouldReturnStreamFromHandler()
+    {
+        // Arrange
+        var request = new StreamSequenceRequest(3, SimulateDelayMs: 0);
+        var expectedItems = new[] { new SequenceItem(1), new SequenceItem(2), new SequenceItem(3) };
+        var mockHandler = new Mock<IStreamRequestHandler<StreamSequenceRequest, SequenceItem>>();
+
+        mockHandler.Setup(h => h.Handle(request, It.IsAny<CancellationToken>()))
+                   .Returns(ToAsyncEnumerable(expectedItems));
+
+        SetupStreamHandlerResolution(mockHandler.Object);
+
+        var receivedItems = new List<SequenceItem>();
+
+        // Act
+        var stream = _mediator.CreateStream(request);
+        await foreach (var item in stream)
+        {
+            receivedItems.Add(item);
+        }
+
+        // Assert
+        receivedItems.Should().BeEquivalentTo(expectedItems, options => options.WithStrictOrdering());
+        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IStreamRequestHandler<StreamSequenceRequest, SequenceItem>)), Times.Once);
+        mockHandler.Verify(h => h.Handle(request, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateStream_WhenHandlerReturnsEmptyStream_ShouldReturnEmptyStream()
+    {
+        // Arrange
+        var request = new EmptyStreamRequest();
+        var mockHandler = new Mock<IStreamRequestHandler<EmptyStreamRequest, string>>();
+        mockHandler.Setup(h => h.Handle(request, It.IsAny<CancellationToken>()))
+                   .Returns(ToAsyncEnumerable(Enumerable.Empty<string>()));
+
+        SetupStreamHandlerResolution(mockHandler.Object);
+
+        var receivedItems = new List<string>();
+
+        // Act
+        var stream = _mediator.CreateStream(request);
+        await foreach (var item in stream)
+        {
+            receivedItems.Add(item);
+        }
+
+        // Assert
+        receivedItems.Should().BeEmpty();
+        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IStreamRequestHandler<EmptyStreamRequest, string>)), Times.Once);
+        mockHandler.Verify(h => h.Handle(request, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateStream_WhenHandlerNotFound_ShouldThrowInvalidOperationException()
+    {
+        // Arrange
+        var request = new UnregisteredStreamRequest();
+
+        _serviceProviderMock.Setup(sp => sp.GetService(typeof(IStreamRequestHandler<UnregisteredStreamRequest, int>)))
+                            .Returns(null);
+
+        // Act
+        Func<Task> act = async () =>
+        {
+            var stream = _mediator.CreateStream(request);
+            await foreach (var _ in stream) { }
+        };
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage($"*IStreamRequestHandler`2[M3diator.Tests.UnregisteredStreamRequest,System.Int32]*registered*");
+
+        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IStreamRequestHandler<UnregisteredStreamRequest, int>)), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateStream_WhenHandlerChecksCancellation_ShouldRespectToken()
+    {
+        // Arrange
+        var request = new StreamSequenceRequest(10, SimulateDelayMs: 10);
+        var mockHandler = new StreamSequenceHandler();
+        using var cts = new CancellationTokenSource();
+        var receivedItems = new List<SequenceItem>();
+        int itemsToReceive = 3;
+
+        SetupStreamHandlerResolution(mockHandler);
+
+        // Act & Assert
+        var stream = _mediator.CreateStream(request, cts.Token);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var item in stream.WithCancellation(cts.Token))
+            {
+                receivedItems.Add(item);
+                if (receivedItems.Count >= itemsToReceive)
+                {
+                    cts.Cancel();
+
+                    await Task.Delay(50, CancellationToken.None);
+                }
+            }
+        });
+
+        // Assert
+        receivedItems.Should().HaveCount(itemsToReceive);
+        receivedItems.Select(i => i.Value).Should().Equal(1, 2, 3);
+        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IStreamRequestHandler<StreamSequenceRequest, SequenceItem>)), Times.Once);
+    }
+
     private void SetupHandlerResolution<TRequest, TResponse>(Mock<IRequestHandler<TRequest, TResponse>> mockHandler)
         where TRequest : IRequest<TResponse> => SetupHandlerResolution(mockHandler.Object);
 
@@ -420,5 +532,23 @@ public class M3diatorImplTests
 
         _serviceProviderMock.Setup(sp => sp.GetService(handlerEnumerableType))
                            .Returns(handlers);
+    }
+
+    private void SetupStreamHandlerResolution<TRequest, TResponse>(IStreamRequestHandler<TRequest, TResponse> handlerInstance)
+             where TRequest : IStreamRequest<TResponse>
+    {
+        var handlerServiceType = typeof(IStreamRequestHandler<TRequest, TResponse>);
+
+        _serviceProviderMock.Setup(sp => sp.GetService(handlerServiceType))
+                            .Returns(handlerInstance);
+    }
+
+    private static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(IEnumerable<T> source)
+    {
+        foreach (var item in source)
+        {
+            await Task.Yield();
+            yield return item;
+        }
     }
 }
