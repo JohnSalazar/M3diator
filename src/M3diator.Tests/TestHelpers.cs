@@ -1,6 +1,7 @@
 ﻿using M3diator.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Runtime.CompilerServices;
 
 namespace M3diator.Tests
 {
@@ -10,6 +11,10 @@ namespace M3diator.Tests
     public record SpyRequest : IRequest<SpyResponse>;
     public record SpyResponse;
     public record SpyNotification : INotification;
+    public record SequenceItem(int Value);
+    public record StreamSequenceRequest(int Count, int SimulateDelayMs = 5) : IStreamRequest<SequenceItem>;
+    public record EmptyStreamRequest() : IStreamRequest<string>;
+    public record UnregisteredStreamRequest() : IStreamRequest<int>;
 
 
     public class PingHandler : IRequestHandler<Ping, Pong> { public Task<Pong> Handle(Ping request, CancellationToken cancellationToken) => Task.FromResult(new Pong($"Received: {request.Message}")); }
@@ -18,18 +23,54 @@ namespace M3diator.Tests
     public class SpyNotificationHandler(List<string>? executionLog = null) : INotificationHandler<SpyNotification> { private readonly List<string>? _log = executionLog; public const string CalledMarker = "SpyNotificationHandler.Handle CALLED"; public Task Handle(SpyNotification notification, CancellationToken cancellationToken) { _log?.Add(CalledMarker); Console.WriteLine(CalledMarker); return Task.CompletedTask; } }
     public class SpyNotificationHandler2(List<string>? executionLog = null) : INotificationHandler<SpyNotification> { private readonly List<string>? _log = executionLog; public const string CalledMarker = "SpyNotificationHandler2.Handle CALLED"; public Task Handle(SpyNotification notification, CancellationToken cancellationToken) { _log?.Add(CalledMarker); Console.WriteLine(CalledMarker); return Task.CompletedTask; } }
     public class FailingSpyNotificationHandler(List<string>? executionLog = null) : INotificationHandler<SpyNotification> { private readonly List<string>? _log = executionLog; public const string CalledMarker = "FailingSpyNotificationHandler.Handle CALLED"; public const string FailureMessage = "Handler Failed Deliberately"; public Task Handle(SpyNotification notification, CancellationToken cancellationToken) { _log?.Add(CalledMarker); Console.WriteLine(CalledMarker); throw new InvalidOperationException(FailureMessage); } }
-
-
     public class PassThroughBehavior<TRequest, TResponse>(List<string>? executionLog = null) : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { private readonly List<string>? _log = executionLog; public string Id { get; set; } = Guid.NewGuid().ToString("N")[..6]; public string Marker => $"PassThroughBehavior ({Id}) Executed"; public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) { _log?.Add(Marker); Console.WriteLine(Marker); return next(); } }
     public class FailingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { public const string CalledMarker = "FailingBehavior Executed - THROWING"; public const string ExceptionMessage = "Simulated pipeline failure"; public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) { Console.WriteLine(CalledMarker); throw new InvalidOperationException(ExceptionMessage); } }
     public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { public const string MarkerBefore = "LoggingBehavior - Before"; public const string MarkerAfter = "LoggingBehavior - After"; public const string MarkerException = "LoggingBehavior - Exception"; private readonly List<string>? _logList; private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger; public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>>? logger = null, List<string>? executionLog = null) { _logger = logger ?? NullLogger<LoggingBehavior<TRequest, TResponse>>.Instance; _logList = executionLog; } public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) { string requestTypeName = typeof(TRequest).Name; string beforeMessage = $"{MarkerBefore} {requestTypeName}"; _logList?.Add(beforeMessage); _logger.LogInformation("Handling request {RequestType}", requestTypeName); try { var response = await next().ConfigureAwait(false); string responseTypeName = typeof(TResponse).Name; string afterMessage = $"{MarkerAfter} {requestTypeName} -> {responseTypeName}"; _logList?.Add(afterMessage); _logger.LogInformation("Finished handling {RequestType}, returning {ResponseType}", requestTypeName, responseTypeName); return response; } catch (Exception ex) { string exceptionMessage = $"{MarkerException} {requestTypeName}: {ex.Message}"; _logList?.Add(exceptionMessage); _logger.LogError(ex, "Exception handling {RequestType}", requestTypeName); throw; } } }
+    public class StreamSequenceHandler(List<string>? executionLog = null) : IStreamRequestHandler<StreamSequenceRequest, SequenceItem>
+    {
+        private readonly List<string>? _log = executionLog;
+        public const string CalledMarker = "StreamSequenceHandler.Handle CALLED";
+        public const string ItemMarker = "StreamSequenceHandler YIELDED item";
 
+        public async IAsyncEnumerable<SequenceItem> Handle(StreamSequenceRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            _log?.Add(CalledMarker);
+            for (int i = 1; i <= request.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (request.SimulateDelayMs > 0)
+                {
+                    await Task.Delay(request.SimulateDelayMs, cancellationToken);
+                }
+                _log?.Add($"{ItemMarker} {i}");
+                yield return new SequenceItem(i);
+            }
+        }
+    }
+    public class EmptyStreamHandler : IStreamRequestHandler<EmptyStreamRequest, string>
+    {
+        private readonly List<string>? _log;
+        public const string CalledMarker = "EmptyStreamHandler.Handle CALLED";
+
+        public EmptyStreamHandler(List<string>? executionLog = null)
+        {
+            _log = executionLog;
+        }
+
+        public async IAsyncEnumerable<string> Handle(EmptyStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            _log?.Add(CalledMarker);
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
 }
 
 namespace M3diator.Tests.TestAssemblyMarker
 {
     using M3diator.Internal;
     using System;
+    using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -39,6 +80,5 @@ namespace M3diator.Tests.TestAssemblyMarker
     public class TestNotificationHandler2 : INotificationHandler<TestNotification> { public Task Handle(TestNotification notification, CancellationToken cancellationToken) => Task.CompletedTask; }
     public class TestPipelineBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) { Console.WriteLine("TestPipelineBehavior Executed"); return next(); } }
     public class MarkerType { }
-    public class MyCustomMediatorForTest : IMediator { public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default) => Task.FromResult(default(TResponse)!); public Task Send(IRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask; public Task<object?> Send(object request, CancellationToken cancellationToken = default) => Task.FromResult<object?>(null); public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification => Task.CompletedTask; public Task Publish(object notification, CancellationToken cancellationToken = default) => Task.CompletedTask; }
-
+    public class MyCustomMediatorForTest : IMediator { public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default) => Task.FromResult(default(TResponse)!); public Task Send(IRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask; public Task<object?> Send(object request, CancellationToken cancellationToken = default) => Task.FromResult<object?>(null); public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification => Task.CompletedTask; public Task Publish(object notification, CancellationToken cancellationToken = default) => Task.CompletedTask; public async IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, [EnumeratorCancellation] CancellationToken cancellationToken = default) { await Task.CompletedTask; yield break; } }
 }

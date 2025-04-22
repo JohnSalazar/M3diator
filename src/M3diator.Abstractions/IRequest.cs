@@ -10,8 +10,3 @@ public interface IRequest : IRequest<Unit>, IBaseRequest;
 /// </summary>
 /// <typeparam name="TResponse">Response type</typeparam>
 public interface IRequest<out TResponse> : IBaseRequest;
-
-/// <summary>
-/// Base interface for all requests - used simply for variance for Send method
-/// </summary>
-public interface IBaseRequest { }

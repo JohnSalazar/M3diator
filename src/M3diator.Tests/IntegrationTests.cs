@@ -260,4 +260,145 @@ public class IntegrationTests
         executionLog.Should().Contain(SpyNotificationHandler.CalledMarker);
         executionLog.Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task CreateStream_Integration_WithRegisteredHandler_ShouldReturnStream()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var executionLog = new List<string>();
+        services.AddSingleton(executionLog);
+        services.AddLogging();
+
+        services.AddM3diator(cfg =>
+            cfg.RegisterServicesFromAssemblyContaining<IntegrationTests>()
+               .WithLifetime(ServiceLifetime.Transient)
+        );
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+
+        var request = new StreamSequenceRequest(4, SimulateDelayMs: 1);
+        var expectedValues = new[] { 1, 2, 3, 4 };
+        var receivedItems = new List<SequenceItem>();
+
+        // Act
+        var stream = mediator.CreateStream(request);
+        await foreach (var item in stream)
+        {
+            receivedItems.Add(item);
+        }
+
+        // Assert
+        receivedItems.Select(i => i.Value).Should().BeEquivalentTo(expectedValues, options => options.WithStrictOrdering());
+        executionLog.Should().Contain(StreamSequenceHandler.CalledMarker);
+        executionLog.Where(log => log.StartsWith(StreamSequenceHandler.ItemMarker)).Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task CreateStream_Integration_EmptyHandler_ShouldReturnEmpty()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var executionLog = new List<string>();
+        services.AddSingleton(executionLog);
+        services.AddLogging();
+        services.AddM3diator(cfg =>
+            cfg.RegisterServicesFromAssemblyContaining<IntegrationTests>()
+               .WithLifetime(ServiceLifetime.Transient)
+        );
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+
+        var request = new EmptyStreamRequest();
+        var receivedItems = new List<string>();
+
+        // Act
+        var stream = mediator.CreateStream(request);
+        await foreach (var item in stream)
+        {
+            receivedItems.Add(item);
+        }
+
+        // Assert
+        receivedItems.Should().BeEmpty();
+        executionLog.Should().Contain(EmptyStreamHandler.CalledMarker);
+    }
+
+    [Fact]
+    public async Task CreateStream_Integration_UnregisteredHandler_ShouldThrow()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddM3diator(cfg =>
+        {
+            cfg.RegisterServicesFromAssemblyContaining<IMediator>();
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+
+        var request = new UnregisteredStreamRequest();
+
+        // Act
+        Func<Task> act = async () =>
+        {
+            var stream = mediator.CreateStream(request);
+            await foreach (var _ in stream) { }
+        };
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>()
+                 .WithMessage($"*IStreamRequestHandler`2[M3diator.Tests.UnregisteredStreamRequest,System.Int32]*registered*");
+    }
+
+    [Fact]
+    public async Task CreateStream_Integration_WithCancellation_ShouldCancelStream()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var executionLog = new List<string>();
+        services.AddSingleton(executionLog);
+        services.AddLogging();
+        services.AddM3diator(cfg =>
+            cfg.RegisterServicesFromAssemblyContaining<IntegrationTests>()
+               .WithLifetime(ServiceLifetime.Transient)
+        );
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+
+        var request = new StreamSequenceRequest(10, SimulateDelayMs: 10);
+        using var cts = new CancellationTokenSource();
+        var receivedItems = new List<SequenceItem>();
+        int itemsToReceive = 2;
+
+        // Act & Assert
+        var stream = mediator.CreateStream(request, cts.Token);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var item in stream.WithCancellation(cts.Token))
+            {
+                receivedItems.Add(item);
+                if (receivedItems.Count >= itemsToReceive)
+                {
+                    cts.Cancel();
+                    await Task.Delay(50, CancellationToken.None);
+                }
+            }
+        });
+
+        // Assert
+        receivedItems.Should().HaveCount(itemsToReceive);
+        receivedItems.Select(i => i.Value).Should().Equal(1, 2);
+        executionLog.Should().Contain(StreamSequenceHandler.CalledMarker);
+        executionLog.Where(log => log.StartsWith(StreamSequenceHandler.ItemMarker)).Should().HaveCount(itemsToReceive);
+    }
 }
