@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace M3diator;
 
@@ -15,6 +16,7 @@ public class M3diatorImpl : IMediator
     private readonly IServiceProvider _serviceProvider;
     private readonly ConcurrentDictionary<Type, RequestHandlerBase> _requestHandlers = new();
     private readonly ConcurrentDictionary<Type, List<NotificationHandlerWrapperBase>> _notificationHandlers = new();
+    private readonly ConcurrentDictionary<Type, StreamRequestHandlerBase> _streamRequestHandlers = new();
 
     private static readonly ConcurrentDictionary<Type, MethodInfo> SendInternalMethodCache = new();
 
@@ -140,6 +142,17 @@ public class M3diatorImpl : IMediator
         return PublishInternal(iNotification, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        await foreach (var item in CreateStreamInternal(request, cancellationToken).ConfigureAwait(false))
+        {
+            yield return item;
+        }
+    }
+
     private async Task<TResponse> SendInternal<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
     {
         var requestType = request.GetType();
@@ -209,6 +222,38 @@ public class M3diatorImpl : IMediator
         if (exceptions != null && exceptions.Count > 0)
         {
             throw new AggregateException($"One or more errors occurred while publishing notification '{notificationType.FullName}'", exceptions);
+        }
+    }
+
+    private async IAsyncEnumerable<TResponse> CreateStreamInternal<TResponse>(IStreamRequest<TResponse> request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var requestType = request.GetType();
+
+        var streamHandlerWrapper = _streamRequestHandlers.GetOrAdd(requestType, static (reqType, sp) =>
+        {
+            var handlerServiceType = typeof(IStreamRequestHandler<,>).MakeGenericType(reqType, typeof(TResponse));
+            var handlerInstance = sp.GetRequiredService(handlerServiceType);
+            var wrapperType = typeof(StreamRequestHandlerWrapperImpl<,>).MakeGenericType(reqType, typeof(TResponse));
+            var wrapper = (StreamRequestHandlerBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
+            return wrapper;
+        }, _serviceProvider);
+
+        var stream = streamHandlerWrapper.Handle(request, cancellationToken);
+
+        await foreach (var item in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (item is TResponse responseItem)
+            {
+                yield return responseItem;
+            }
+            else if (item is null && (!typeof(TResponse).IsValueType || Nullable.GetUnderlyingType(typeof(TResponse)) != null))
+            {
+                yield return default!;
+            }
+            else
+            {
+                throw new InvalidCastException($"Stream item of type {item?.GetType().FullName ?? "null"} could not be cast to target type {typeof(TResponse).FullName}.");
+            }
         }
     }
 }

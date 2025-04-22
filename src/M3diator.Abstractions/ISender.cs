@@ -21,4 +21,13 @@ public interface ISender
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <returns>A task that represents the send operation. The task result contains the handler's response as object?.</returns>
     Task<object?> Send(object request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates and returns an asynchronous stream of responses for a stream request.
+    /// </summary>
+    /// <typeparam name="TResponse">The type of the response items in the stream.</typeparam>
+    /// <param name="request">The stream request object.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An asynchronous stream of response items.</returns>
+    IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default);
 }

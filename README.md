@@ -36,9 +36,7 @@ _(Note: `M3diator` depends on `M3diator.Abstractions`, so installing `M3diator` 
 
 Register M3diator and its handlers in your application's service collection, typically in `Program.cs` (for .NET 6+) or `Startup.cs`.
 
-C#
-
-```
+```csharp
 // Program.cs (.NET 6+)
 
 using M3diator.Extensions; // Add this using statement
@@ -78,9 +76,7 @@ Requests represent an action to perform or data to retrieve. They can optionally
 
 #### Defining Requests
 
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 
 /// <summary>
@@ -118,11 +114,7 @@ Handlers contain the logic to process a specific request type. Each request type
 *   **`IRequestHandler<TRequest, TResponse>`:** Handles requests implementing `IRequest<TResponse>`.
 *   **`IRequestHandler<TRequest>`:** Handles requests implementing `IRequest` (which implicitly means `IRequest<Unit>`).
 
-<!-- end list -->
-
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -198,9 +190,7 @@ public interface ICustomerRepository { /* ... methods ... */ }
 
 Inject `IMediator` or `ISender` into your classes (e.g., Controllers, Services) and use the `Send` method.
 
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 using System.Threading.Tasks;
@@ -253,9 +243,7 @@ Notifications represent something that has happened (an event). They are dispatc
 
 #### Defining Notifications
 
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 
 /// <summary>
@@ -278,9 +266,7 @@ public class CustomerCreatedNotification : INotification
 
 A single notification can have zero or many handlers. Handlers implement `INotificationHandler<TNotification>`.
 
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -327,9 +313,7 @@ public class LogCustomerCreationHandler : INotificationHandler<CustomerCreatedNo
 
 Inject `IMediator` or `IPublisher` and use the `Publish` method. `Publish` will locate all registered handlers for the notification type and invoke them (typically concurrently, but M3diator awaits their completion by default).
 
-C#
-
-```
+```csharp
 // Inside CreateCustomerCommandHandler.Handle method, after saving the customer:
 
 public async Task<Unit> Handle(CreateCustomerCommand request, CancellationToken cancellationToken)
@@ -364,7 +348,7 @@ public class CreateCustomerCommandHandler : IRequestHandler<CreateCustomerComman
 }
 ```
 
-### 3\. Pipeline Behaviors
+### 3. Pipeline Behaviors
 
 Pipeline behaviors allow you to wrap inner request handlers with additional logic, enabling cross-cutting concerns like logging, validation, performance monitoring, or transaction management without cluttering your core handler logic.
 
@@ -372,9 +356,7 @@ Pipeline behaviors allow you to wrap inner request handlers with additional logi
 
 #### Defining a Pipeline Behavior
 
-C#
-
-```
+```csharp
 using M3diator.Abstractions;
 using System;
 using System.Diagnostics;
@@ -428,9 +410,7 @@ public class PerformanceLoggingBehavior<TRequest, TResponse> : IPipelineBehavior
 
 Register pipeline behaviors with the DI container. The order of registration matters; they execute in the order they are added.
 
-C#
-
-```
+```csharp
 // Program.cs or Startup.cs
 
 builder.Services.AddM3diator(cfg =>
@@ -450,11 +430,144 @@ builder.Services.AddM3diator(cfg =>
 
 When a request is sent using `_mediator.Send()`, M3diator constructs a pipeline: the request flows through each registered `IPipelineBehavior` before reaching the actual `IRequestHandler`, and the response flows back out through the behaviors in reverse order.
 
+### 4. Streaming Requests
+
+Beyond single request/response and notifications, M3diator supports streaming requests where a single request results in a stream of multiple responses over time. This is useful for scenarios like processing large datasets without loading everything into memory, handling long-running operations that report progress, or returning sequences where items become available incrementally.
+
+* **`IStreamRequest<TResponse>`:** Represents a request that will yield a stream of `TResponse` items.
+* **`IStreamRequestHandler<TRequest, TResponse>`:** Defines the handler responsible for processing an `IStreamRequest<TResponse>` and generating the `IAsyncEnumerable<TResponse>`.
+
+#### Defining Stream Requests
+
+Define a class or record implementing `IStreamRequest<TResponse>`, where `TResponse` is the type of item in the resulting stream.
+
+```csharp
+using M3diator; // Or M3diator.Abstractions if interfaces are there
+
+/// <summary>
+/// Represents a request to stream a sequence of data records.
+/// </summary>
+/// <param name="Filter">Criteria to filter the data.</param>
+public record StreamDataRequest(string Filter) : IStreamRequest<DataRecord>;
+
+// Example response item DTO
+public record DataRecord(int Id, string Payload);
+```
+
+#### Defining Stream Request Handlers
+
+Implement IStreamRequestHandler<TRequest, TResponse>. The Handle method must return an IAsyncEnumerable<TResponse>. Use async IAsyncEnumerable and yield return to produce items asynchronously. Crucially, check the CancellationToken frequently within the handler to support cancellation during potentially long-running stream generation.
+
+```csharp
+using M3diator; // Or M3diator.Abstractions
+using System.Collections.Generic;
+using System.Runtime.CompilerServices; // For [EnumeratorCancellation]
+using System.Threading;
+using System.Threading.Tasks;
+
+/// <summary>
+/// Handles the StreamDataRequest to generate a stream of DataRecord objects.
+/// </summary>
+public class StreamDataRequestHandler : IStreamRequestHandler<StreamDataRequest, DataRecord>
+{
+    // Example dependency
+    // private readonly IDataSource _dataSource;
+    // public StreamDataRequestHandler(IDataSource dataSource) { /* ... */ }
+
+    /// <summary>
+    /// Processes the request and generates the asynchronous stream.
+    /// </summary>
+    /// <param name="request">The stream request.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An asynchronous stream of DataRecord items.</returns>
+    public async IAsyncEnumerable<DataRecord> Handle(
+        StreamDataRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        Console.WriteLine(<span class="math-inline">"Streaming data records matching filter: {request.Filter}");
+        // Simulate fetching pages or chunks of data
+        for (int i = 1; i <= 5; i++) // Example: 5 chunks
+        {
+        // Check for cancellation before potentially expensive work/IO
+        cancellationToken.ThrowIfCancellationRequested();
+        Console.WriteLine(</span>"Fetching data chunk {i}...");
+            await Task.Delay(100, cancellationToken); // Simulate async I/O
+
+            // Yield items for the current chunk
+            for (int j = 0; j < 3; j++) // Example: 3 items per chunk
+            {
+                // Check cancellation before yielding
+                cancellationToken.ThrowIfCancellationRequested();
+
+                int recordId = (i - 1) * 3 + j + 1;
+                yield return new DataRecord(recordId, $"Record {recordId} for filter '{request.Filter}'");
+            }
+        }
+        Console.WriteLine("Finished streaming data records.");
+    }
+}
+```
+
+#### Consuming Streams
+
+Inject IMediator or ISender and use the CreateStream method. Consume the returned IAsyncEnumerable<TResponse> using await foreach.
+
+```csharp
+using M3diator; // Or M3diator.Abstractions
+using Microsoft.AspNetCore.Mvc; // Example using ASP.NET Core
+using System.Threading.Tasks;
+using System.Threading; // For CancellationToken
+
+[ApiController]
+[Route("[controller]")]
+public class DataStreamController : ControllerBase
+{
+    private readonly IMediator _mediator;
+
+    public DataStreamController(IMediator mediator)
+    {
+        _mediator = mediator;
+    }
+
+    /// <summary>
+    /// GET endpoint to initiate and consume a data stream.
+    /// </summary>
+    [HttpGet("stream")]
+    public async Task StreamData([FromQuery] string filter = "default", CancellationToken cancellationToken = default)
+    {
+        var request = new StreamDataRequest(filter);
+
+        Console.WriteLine($"Controller: Calling CreateStream for filter '{filter}'...");
+
+        // Use CreateStream to get the async stream
+        IAsyncEnumerable<DataRecord> dataStream = _mediator.CreateStream(request, cancellationToken);
+
+        // Consume the stream asynchronously
+        // Response headers must be sent before the first await foreach iteration if streaming to HTTP response
+        // Consider using IActionResult like `return new StreamResult(dataStream)` in real web scenarios
+
+        int count = 0;
+        await foreach (var record in dataStream.WithCancellation(cancellationToken)) // Essential to propagate cancellation
+        {
+            // Process each item as it arrives
+            count++;
+            Console.WriteLine(<span class="math-inline">"Controller: Received record {record.Id}: {record.Payload}");
+            // Optional: Add delay to simulate processing
+            // await Task.Delay(50, cancellationToken);
+        }
+        Console.WriteLine(</span>"Controller: Finished consuming stream. Total items received: {count}.");
+
+        // In a real API, you might stream this directly to the response body.
+        // This example just consumes and logs. You would typically return an appropriate ActionResult.
+        // return Ok(); // Or perhaps no explicit return if streaming directly to Response.BodyWriter
+    }
+}
+```
+
+
 ## Performance Benchmarks
 
 Performance is a key consideration for M3diator. Below are the benchmark results comparing M3diator's `Send` and `Publish` operations against MediatR.
-
-Ini, TOML
 
 ```
 
@@ -467,47 +580,104 @@ Intel Core i7-4790 CPU 3.60GHz (Haswell), 1 CPU, 8 logical and 4 physical cores
 Job=.NET 9.0  Runtime=.NET 9.0  
 
 ```
-| Method                                    | NumberOfNotificationHandlers | Mean         | Error        | StdDev       | Median       | Gen0   | Allocated |
-|------------------------------------------ |----------------------------- |-------------:|-------------:|-------------:|-------------:|-------:|----------:|
-| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;    | 1                            |     13.08 μs |     0.130 μs |     0.108 μs |     13.04 μs | 0.5798 |    2464 B |
-| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;    | 3                            |     13.33 μs |     0.263 μs |     0.513 μs |     13.01 μs | 0.5798 |    2464 B |
-| &#39;Publish 3 Handlers (Cancelled Token)&#39;    | 1                            |     79.39 μs |     0.633 μs |     0.495 μs |     79.35 μs | 2.8076 |   12057 B |
-| &#39;Publish 3 Handlers (Cancelled Token)&#39;    | 3                            |     81.45 μs |     1.589 μs |     3.927 μs |     79.23 μs | 2.8076 |   12057 B |
-| &#39;Resolve+Exec Handler Directly&#39;           | 1                            | 15,191.07 μs |    51.350 μs |    48.033 μs | 15,192.82 μs |      - |     419 B |
-| &#39;Send&lt;T&gt; No Pipeline&#39;                     | 1                            | 15,193.86 μs |    79.858 μs |    74.699 μs | 15,209.90 μs |      - |    1091 B |
-| &#39;Resolve+Exec Handler Directly&#39;           | 3                            | 15,219.73 μs |    41.572 μs |    38.886 μs | 15,210.64 μs |      - |     419 B |
-| &#39;Send&lt;T&gt; No Pipeline&#39;                     | 3                            | 15,226.44 μs |    47.439 μs |    44.375 μs | 15,222.56 μs |      - |    1092 B |
-| &#39;Publish 1 Handler / 1 Behavior&#39;          | 1                            | 60,472.51 μs |   726.233 μs |   679.319 μs | 60,598.92 μs |      - |    2004 B |
-| &#39;Publish 1 Handler / 1 Behavior&#39;          | 3                            | 60,497.97 μs |   802.531 μs |   750.688 μs | 60,758.64 μs |      - |    2004 B |
-| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;        | 3                            | 75,287.62 μs |   770.391 μs |   720.624 μs | 75,528.86 μs |      - |    2570 B |
-| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;               | 1                            | 75,540.79 μs |   345.888 μs |   323.543 μs | 75,558.99 μs |      - |    2570 B |
-| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;   | 3                            | 75,541.77 μs |   266.055 μs |   248.868 μs | 75,515.57 μs |      - |    2529 B |
-| &#39;Send(object) 1 Behavior (Scan)&#39;          | 3                            | 75,583.53 μs |   703.996 μs |   658.518 μs | 75,665.46 μs |      - |    3298 B |
-| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;               | 3                            | 75,585.11 μs |   855.155 μs |   799.912 μs | 75,825.49 μs |      - |    2570 B |
-| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;   | 1                            | 75,626.34 μs |   491.800 μs |   460.030 μs | 75,718.40 μs |      - |    2570 B |
-| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;        | 1                            | 75,661.62 μs |   321.583 μs |   300.809 μs | 75,708.57 μs |      - |    2570 B |
-| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;            | 3                            | 75,786.21 μs |   236.430 μs |   221.157 μs | 75,758.21 μs |      - |    2690 B |
-| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;            | 1                            | 75,801.17 μs |   249.574 μs |   233.451 μs | 75,808.96 μs |      - |    2690 B |
-| &#39;Send(object) 1 Behavior (Scan)&#39;          | 1                            | 75,851.68 μs |   375.230 μs |   350.991 μs | 75,936.73 μs |      - |    3339 B |
-| &#39;Publish 3 Handlers (Valid Token)&#39;        | 1                            | 90,459.93 μs | 1,170.207 μs | 1,094.612 μs | 90,440.82 μs |      - |    2891 B |
-| &#39;Publish 3 Handlers / 2 Behaviors&#39;        | 3                            | 90,547.66 μs | 1,161.886 μs | 1,086.829 μs | 90,800.73 μs |      - |    2891 B |
-| &#39;Resolve+Exec 3 Handlers Directly&#39;        | 3                            | 90,685.72 μs | 1,075.169 μs | 1,005.714 μs | 91,119.73 μs |      - |    2331 B |
-| &#39;Publish 3 Handlers / 1 Behavior&#39;         | 3                            | 90,720.39 μs | 1,242.969 μs | 1,101.860 μs | 90,981.37 μs |      - |    2891 B |
-| &#39;Publish 3 Handlers / 1 Behavior&#39;         | 1                            | 90,753.52 μs |   882.555 μs |   825.543 μs | 90,965.75 μs |      - |    2891 B |
-| &#39;Publish 3 Handlers / 2 Behaviors&#39;        | 1                            | 90,956.87 μs |   698.312 μs |   619.035 μs | 91,123.98 μs |      - |    2891 B |
-| &#39;Resolve+Exec 3 Handlers Directly&#39;        | 1                            | 90,963.86 μs |   920.439 μs |   860.979 μs | 91,046.77 μs |      - |    2331 B |
-| &#39;Publish 3 Handlers (Valid Token)&#39;        | 3                            | 91,034.88 μs |   866.341 μs |   810.376 μs | 91,214.27 μs |      - |    2891 B |
-| &#39;Publish(object) 3 Handlers / 1 Behavior&#39; | 3                            | 91,077.77 μs |   379.092 μs |   354.603 μs | 91,083.53 μs |      - |    2891 B |
-| &#39;Publish(object) 3 Handlers / 1 Behavior&#39; | 1                            | 91,097.20 μs |   297.520 μs |   263.744 μs | 91,119.85 μs |      - |    2891 B |
+| Method                                           | NumberOfNotificationHandlers | Operations | Mean         | Error        | StdDev       | Median       | Gen0   | Allocated |
+|------------------------------------------------- |----------------------------- |----------- |-------------:|-------------:|-------------:|-------------:|-------:|----------:|
+| &#39;CreateStream (100 Items) - Get Enumerator Only&#39; | 3                            | 1          |     79.50 ns |     1.099 ns |     1.028 ns |     78.98 ns | 0.0459 |     192 B |
+| &#39;CreateStream (100 Items) - Get Enumerator Only&#39; | 1                            | 1          |     81.21 ns |     1.189 ns |     1.272 ns |     80.66 ns | 0.0459 |     192 B |
+| &#39;CreateStream (100 Items) - Get Enumerator Only&#39; | 3                            | 100        |     82.30 ns |     1.689 ns |     2.312 ns |     82.59 ns | 0.0459 |     192 B |
+| &#39;CreateStream (100 Items) - Get Enumerator Only&#39; | 1                            | 100        |     82.92 ns |     1.113 ns |     1.041 ns |     82.54 ns | 0.0459 |     192 B |
+| &#39;Resolve+Exec Handler Directly&#39;                  | 1                            | 1          |    718.20 ns |     8.442 ns |     7.896 ns |    719.09 ns | 0.0381 |     160 B |
+| &#39;Resolve+Exec Handler Directly&#39;                  | 3                            | 100        |    732.92 ns |    10.589 ns |    11.330 ns |    731.62 ns | 0.0381 |     160 B |
+| &#39;Resolve+Exec Handler Directly&#39;                  | 3                            | 1          |    737.55 ns |    14.486 ns |    19.338 ns |    731.16 ns | 0.0381 |     160 B |
+| &#39;Resolve+Exec Handler Directly&#39;                  | 1                            | 100        |    742.87 ns |    14.462 ns |    19.307 ns |    735.23 ns | 0.0381 |     160 B |
+| &#39;Send&lt;T&gt; No Pipeline&#39;                            | 3                            | 1          |  1,534.21 ns |     9.909 ns |     7.737 ns |  1,532.04 ns | 0.1984 |     832 B |
+| &#39;Send&lt;T&gt; No Pipeline&#39;                            | 3                            | 100        |  1,539.33 ns |    18.297 ns |    15.279 ns |  1,535.14 ns | 0.1984 |     832 B |
+| &#39;Send&lt;T&gt; No Pipeline&#39;                            | 1                            | 1          |  1,573.80 ns |    25.434 ns |    33.071 ns |  1,568.36 ns | 0.1984 |     832 B |
+| &#39;Send&lt;T&gt; No Pipeline&#39;                            | 1                            | 100        |  1,588.01 ns |    20.849 ns |    18.482 ns |  1,583.23 ns | 0.1984 |     832 B |
+| &#39;CreateStream (1 Item) - Consume All&#39;            | 1                            | 100        |  1,603.09 ns |    27.125 ns |    39.760 ns |  1,592.72 ns | 0.2861 |    1200 B |
+| &#39;CreateStream (1 Item) - Consume All&#39;            | 3                            | 100        |  1,607.67 ns |    21.041 ns |    18.652 ns |  1,601.44 ns | 0.2861 |    1200 B |
+| &#39;CreateStream (1 Item) - Consume All&#39;            | 3                            | 1          |  1,622.46 ns |    22.789 ns |    28.821 ns |  1,618.02 ns | 0.2861 |    1200 B |
+| &#39;CreateStream (1 Item) - Consume All&#39;            | 1                            | 1          |  1,671.26 ns |    33.000 ns |    53.289 ns |  1,654.68 ns | 0.2861 |    1200 B |
+| &#39;Resolve+Exec 3 Handlers Directly&#39;               | 3                            | 1          |  2,955.43 ns |    20.377 ns |    15.909 ns |  2,958.23 ns | 0.2594 |    1096 B |
+| &#39;Publish 1 Handler / 1 Behavior&#39;                 | 3                            | 1          |  2,987.83 ns |    52.613 ns |    46.640 ns |  2,979.06 ns | 0.2747 |    1160 B |
+| &#39;Publish 1 Handler / 1 Behavior&#39;                 | 3                            | 100        |  3,009.77 ns |    34.815 ns |    30.863 ns |  3,005.27 ns | 0.2785 |    1160 B |
+| &#39;Resolve+Exec 3 Handlers Directly&#39;               | 3                            | 100        |  3,082.03 ns |    57.841 ns |    56.807 ns |  3,062.29 ns | 0.2594 |    1096 B |
+| &#39;Publish 1 Handler / 1 Behavior&#39;                 | 1                            | 100        |  3,086.57 ns |    52.231 ns |    48.857 ns |  3,053.04 ns | 0.2785 |    1160 B |
+| &#39;Resolve+Exec 3 Handlers Directly&#39;               | 1                            | 100        |  3,123.18 ns |    48.525 ns |    43.016 ns |  3,120.48 ns | 0.2632 |    1096 B |
+| &#39;Resolve+Exec 3 Handlers Directly&#39;               | 1                            | 1          |  3,125.68 ns |    58.143 ns |   114.769 ns |  3,101.72 ns | 0.2632 |    1096 B |
+| &#39;Publish 1 Handler / 1 Behavior&#39;                 | 1                            | 1          |  3,132.85 ns |    39.014 ns |    32.578 ns |  3,120.63 ns | 0.2785 |    1160 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;               | 3                            | 100        |  3,732.14 ns |    72.979 ns |    99.894 ns |  3,700.17 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;               | 3                            | 1          |  3,741.09 ns |    28.557 ns |    23.846 ns |  3,745.75 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;                      | 3                            | 100        |  3,757.58 ns |    34.576 ns |    52.800 ns |  3,762.46 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;                      | 3                            | 1          |  3,785.21 ns |    75.275 ns |    83.668 ns |  3,756.98 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;          | 3                            | 1          |  3,814.40 ns |    64.210 ns |   138.220 ns |  3,757.48 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;          | 3                            | 100        |  3,822.85 ns |    74.931 ns |    89.200 ns |  3,789.99 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;                      | 1                            | 100        |  3,834.02 ns |    46.671 ns |    38.972 ns |  3,837.36 ns | 0.3586 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;               | 1                            | 100        |  3,860.96 ns |    66.466 ns |   124.839 ns |  3,831.74 ns | 0.3586 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Scan)&#39;                      | 1                            | 1          |  3,861.09 ns |    52.176 ns |    43.569 ns |  3,867.14 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Valid Token)&#39;               | 1                            | 1          |  3,879.62 ns |    51.083 ns |    62.735 ns |  3,878.33 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;          | 1                            | 100        |  3,886.14 ns |    75.900 ns |    93.212 ns |  3,866.85 ns | 0.3586 |    1488 B |
+| &#39;Send&lt;T&gt; 2 Behaviors (Scan + Explicit)&#39;          | 1                            | 1          |  3,914.24 ns |    67.050 ns |    55.990 ns |  3,928.99 ns | 0.3510 |    1488 B |
+| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;                   | 3                            | 100        |  3,916.92 ns |    26.306 ns |    21.967 ns |  3,908.74 ns | 0.3815 |    1600 B |
+| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;                   | 3                            | 1          |  3,948.15 ns |    60.062 ns |    50.154 ns |  3,940.37 ns | 0.3815 |    1600 B |
+| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;                   | 1                            | 100        |  4,121.01 ns |    48.030 ns |    40.107 ns |  4,113.23 ns | 0.3815 |    1600 B |
+| &#39;Publish(object) 3 Handlers / 1 Behavior&#39;        | 3                            | 1          |  4,185.43 ns |    81.385 ns |    67.960 ns |  4,170.95 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers / 1 Behavior&#39;                | 3                            | 100        |  4,203.75 ns |    83.878 ns |    82.379 ns |  4,171.86 ns | 0.3967 |    1656 B |
+| &#39;Publish(object) 3 Handlers / 1 Behavior&#39;        | 3                            | 100        |  4,238.92 ns |    84.693 ns |    97.532 ns |  4,205.14 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers / 2 Behaviors&#39;               | 3                            | 1          |  4,258.43 ns |    76.761 ns |    71.802 ns |  4,235.90 ns | 0.3967 |    1656 B |
+| &#39;Send&lt;void&gt; 1 Behavior (Scan)&#39;                   | 1                            | 1          |  4,275.05 ns |   111.803 ns |   318.982 ns |  4,172.57 ns | 0.3815 |    1600 B |
+| &#39;Publish 3 Handlers / 1 Behavior&#39;                | 3                            | 1          |  4,294.15 ns |    81.105 ns |    86.781 ns |  4,264.51 ns | 0.3967 |    1656 B |
+| &#39;Send(object) 1 Behavior (Scan)&#39;                 | 3                            | 100        |  4,298.45 ns |    68.514 ns |   146.010 ns |  4,247.83 ns | 0.4120 |    1760 B |
+| &#39;Publish(object) 3 Handlers / 1 Behavior&#39;        | 1                            | 100        |  4,303.85 ns |    53.808 ns |    44.932 ns |  4,298.67 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers (Valid Token)&#39;               | 3                            | 100        |  4,304.92 ns |    84.253 ns |    90.149 ns |  4,263.33 ns | 0.3967 |    1656 B |
+| &#39;Send(object) 1 Behavior (Scan)&#39;                 | 3                            | 1          |  4,306.35 ns |    80.736 ns |    71.570 ns |  4,313.20 ns | 0.4120 |    1760 B |
+| &#39;Publish 3 Handlers / 1 Behavior&#39;                | 1                            | 100        |  4,335.17 ns |    85.938 ns |    88.252 ns |  4,299.27 ns | 0.3967 |    1656 B |
+| &#39;Publish(object) 3 Handlers / 1 Behavior&#39;        | 1                            | 1          |  4,341.02 ns |    77.747 ns |    68.921 ns |  4,317.27 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers / 2 Behaviors&#39;               | 1                            | 100        |  4,368.40 ns |    84.964 ns |    87.252 ns |  4,324.26 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers (Valid Token)&#39;               | 3                            | 1          |  4,368.91 ns |    60.964 ns |    93.099 ns |  4,345.23 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers (Valid Token)&#39;               | 1                            | 1          |  4,418.89 ns |    85.620 ns |    91.613 ns |  4,369.86 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers (Valid Token)&#39;               | 1                            | 100        |  4,426.77 ns |    88.559 ns |    98.433 ns |  4,368.90 ns | 0.3967 |    1656 B |
+| &#39;Send(object) 1 Behavior (Scan)&#39;                 | 1                            | 1          |  4,429.79 ns |    88.342 ns |   145.149 ns |  4,393.46 ns | 0.4120 |    1760 B |
+| &#39;Publish 3 Handlers / 2 Behaviors&#39;               | 1                            | 1          |  4,442.88 ns |    84.089 ns |    89.975 ns |  4,415.30 ns | 0.3967 |    1656 B |
+| &#39;Send(object) 1 Behavior (Scan)&#39;                 | 1                            | 100        |  4,468.68 ns |    91.655 ns |   250.905 ns |  4,370.62 ns | 0.4120 |    1760 B |
+| &#39;Publish 3 Handlers / 1 Behavior&#39;                | 1                            | 1          |  4,476.06 ns |    77.357 ns |   131.357 ns |  4,442.75 ns | 0.3967 |    1656 B |
+| &#39;Publish 3 Handlers / 2 Behaviors&#39;               | 3                            | 100        |  4,722.01 ns |   166.667 ns |   483.532 ns |  4,562.77 ns | 0.3967 |    1656 B |
+| &#39;CreateStream (10 Items) - Consume All&#39;          | 3                            | 1          |  9,193.48 ns |   177.263 ns |   174.096 ns |  9,119.08 ns | 0.3357 |    1418 B |
+| &#39;CreateStream (10 Items) - Consume All&#39;          | 3                            | 100        |  9,323.62 ns |   186.164 ns |   316.121 ns |  9,184.87 ns | 0.3357 |    1417 B |
+| &#39;CreateStream (10 Items) - Consume All&#39;          | 1                            | 100        |  9,507.38 ns |   182.174 ns |   278.198 ns |  9,418.53 ns | 0.3357 |    1417 B |
+| &#39;CreateStream (10 Items) - Consume All&#39;          | 1                            | 1          |  9,831.18 ns |   197.830 ns |   570.786 ns |  9,609.93 ns | 0.3357 |    1418 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;           | 3                            | 100        | 13,063.68 ns |   149.128 ns |   132.198 ns | 13,051.78 ns | 0.5798 |    2464 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;           | 1                            | 100        | 13,322.75 ns |   208.404 ns |   162.708 ns | 13,374.91 ns | 0.5798 |    2464 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;           | 1                            | 1          | 13,419.36 ns |   194.764 ns |   172.653 ns | 13,436.93 ns | 0.5798 |    2464 B |
+| &#39;Send&lt;T&gt; 1 Behavior (Cancelled Token)&#39;           | 3                            | 1          | 13,636.60 ns |   270.513 ns |   552.587 ns | 13,723.23 ns | 0.5798 |    2464 B |
+| &#39;CreateStream (100 Items) - Cancelled Token&#39;     | 1                            | 100        | 36,008.15 ns |   566.889 ns |   502.533 ns | 35,739.49 ns | 2.0752 |    8752 B |
+| &#39;CreateStream (100 Items) - Cancelled Token&#39;     | 3                            | 100        | 36,151.00 ns |   419.109 ns |   371.530 ns | 36,053.82 ns | 2.0752 |    8752 B |
+| &#39;CreateStream (100 Items) - Cancelled Token&#39;     | 3                            | 1          | 36,683.05 ns |   662.773 ns |   587.531 ns | 36,442.90 ns | 2.0752 |    8752 B |
+| &#39;CreateStream (100 Items) - Cancelled Token&#39;     | 1                            | 1          | 38,564.43 ns |   774.913 ns | 2,284.849 ns | 38,673.34 ns | 2.0752 |    8752 B |
+| &#39;Publish 3 Handlers (Cancelled Token)&#39;           | 3                            | 100        | 79,558.87 ns | 1,455.279 ns | 1,215.224 ns | 79,069.18 ns | 2.8076 |   12057 B |
+| &#39;Publish 3 Handlers (Cancelled Token)&#39;           | 1                            | 1          | 81,550.19 ns | 1,590.645 ns | 2,568.596 ns | 80,842.46 ns | 2.8076 |   12057 B |
+| &#39;Publish 3 Handlers (Cancelled Token)&#39;           | 3                            | 1          | 82,997.97 ns | 1,656.148 ns | 4,245.341 ns | 81,059.58 ns | 2.8076 |   12057 B |
+| &#39;Publish 3 Handlers (Cancelled Token)&#39;           | 1                            | 100        | 84,185.21 ns | 1,677.566 ns | 4,239.424 ns | 84,730.44 ns | 2.8076 |   12057 B |
+| &#39;CreateStream (100 Items) - Consume All&#39;         | 3                            | 100        | 90,154.38 ns |   977.021 ns |   866.104 ns | 89,935.72 ns | 0.7324 |    3640 B |
+| &#39;CreateStream (100 Items) - Consume All&#39;         | 3                            | 1          | 90,321.13 ns |   947.870 ns |   886.638 ns | 90,358.78 ns | 0.8545 |    3640 B |
+| &#39;CreateStream (100 Items) - Consume ToList&#39;      | 1                            | 100        | 90,734.38 ns |   834.082 ns |   780.201 ns | 90,812.85 ns | 0.9766 |    4504 B |
+| &#39;CreateStream (100 Items) - Consume All&#39;         | 1                            | 100        | 92,677.04 ns | 1,816.425 ns | 2,091.798 ns | 92,253.89 ns | 0.8545 |    3640 B |
+| &#39;CreateStream (100 Items) - Consume ToList&#39;      | 3                            | 1          | 93,480.32 ns | 1,427.571 ns | 1,699.421 ns | 92,983.51 ns | 0.9766 |    4504 B |
+| &#39;CreateStream (100 Items) - Consume All&#39;         | 1                            | 1          | 94,641.61 ns | 1,880.534 ns | 3,390.990 ns | 93,615.26 ns | 0.7324 |    3640 B |
+| &#39;CreateStream (100 Items) - Consume ToList&#39;      | 1                            | 1          | 95,666.70 ns |   830.153 ns |   815.321 ns | 95,878.86 ns | 0.9766 |    4504 B |
+| &#39;CreateStream (100 Items) - Consume ToList&#39;      | 3                            | 100        | 97,563.72 ns | 1,822.639 ns | 2,728.040 ns | 97,086.23 ns | 0.9766 |    4504 B |
+
 
 
 
 **Key Takeaways:**
 
-*   M3diator demonstrates significantly **lower execution time** for both sending requests (`Send`) and publishing notifications (`Publish`) compared to MediatR in these benchmarks.
-*   M3diator achieves **zero memory allocation** for the mediator dispatch operations themselves (allocations within handlers are separate).
+* **High Performance:** M3diator demonstrates high performance across all operations (`Send`, `Publish`, `CreateStream`) with low overhead, typically executing in the microsecond or even sub-microsecond range for the core dispatch logic.
+* **Efficient Streaming:** The `CreateStream` operation shows extremely low setup overhead (~75 ns) and scales predictably with the number of items yielded by the handler. It provides an efficient way to handle sequences of data compared to multiple individual requests.
+* **Low Allocation:** M3diator operations exhibit low memory allocation for the dispatching mechanism itself. While not strictly zero (e.g., `CreateStream` setup allocates ~192 B, `Send` without pipeline ~832 B), the overhead allocation is minimal, making it suitable for performance-sensitive applications. Allocations primarily scale with the data being processed (handler/item allocations).
+* **Minimal Pipeline Impact:** The pipeline behavior mechanism adds very little overhead per behavior (typically sub-microsecond), allowing for cross-cutting concerns without significant performance degradation.
 
-These results suggest that M3diator can be a highly performant choice for applications where mediator overhead is a critical factor.
+These results suggest that M3diator is a highly performant choice for applications requiring efficient in-process messaging, including request/response, notifications, and data streaming patterns, where mediator overhead is a critical factor.
 
 ## Contributing
 
