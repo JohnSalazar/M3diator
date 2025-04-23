@@ -42,4 +42,8 @@
     <ProjectReference Include="..\M3diator.Abstractions\M3diator.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="M3diator.Tests" />
+  </ItemGroup>
+
 </Project>

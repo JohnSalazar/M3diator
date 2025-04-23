@@ -7,4 +7,4 @@ using System.Threading.Tasks;
 /// </summary>
 /// <typeparam name="TResponse">Response type</typeparam>
 /// <returns>Awaitable task containing the <typeparamref name="TResponse"/></returns>
-public delegate Task<TResponse> RequestHandlerDelegate<TResponse>();
+internal delegate Task<TResponse> RequestHandlerDelegate<TResponse>();

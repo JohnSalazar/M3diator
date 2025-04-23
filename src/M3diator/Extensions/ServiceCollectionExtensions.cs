@@ -1,5 +1,4 @@
 ﻿using M3diator.Internal;
-using M3diator.Services;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -20,13 +19,15 @@ public static class ServiceCollectionExtensions
     /// <exception cref="ArgumentNullException">Thrown if services or configuration is null.</exception>
     /// <exception cref="ArgumentException">Thrown if no assemblies to scan are specified in the configuration,
     /// or if the MediatorImplementationType is not assignable to IMediator.</exception>
-    public static IServiceCollection AddM3diator(this IServiceCollection services, Action<M3diatorServiceConfiguration> configuration)
+    public static IServiceCollection AddM3diator(this IServiceCollection services, Action<M3diatorServiceConfigurationOptions> configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var serviceConfig = new M3diatorServiceConfiguration();
-        configuration(serviceConfig);
+        var options = new M3diatorServiceConfigurationOptions();
+        configuration(options);
+
+        var serviceConfig = options.InternalConfig;
 
         if (serviceConfig.AssembliesToRegister.Count == 0)
         {

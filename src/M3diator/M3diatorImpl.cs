@@ -11,7 +11,7 @@ namespace M3diator;
 /// Handles request sending, notification publishing, and pipeline behavior execution.
 /// Implements caching for handler resolution to improve performance.
 /// </summary>
-public class M3diatorImpl : IMediator
+internal class M3diatorImpl : IMediator
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ConcurrentDictionary<Type, RequestHandlerBase> _requestHandlers = new();
@@ -166,7 +166,7 @@ public class M3diatorImpl : IMediator
             return wrapper;
         }, _serviceProvider);
 
-        RequestHandlerDelegate<TResponse> handlerDelegate = async () =>
+        Func<Task<TResponse>> handlerDelegate = async () =>
         {
             object? result = await handler.Handle(request, cancellationToken).ConfigureAwait(false);
             if (typeof(TResponse) == typeof(Unit)) { return default!; }
@@ -176,7 +176,7 @@ public class M3diatorImpl : IMediator
         var behaviorServiceType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(TResponse));
         var resolvedBehaviors = _serviceProvider.GetServices(behaviorServiceType).Reverse();
 
-        RequestHandlerDelegate<TResponse> pipeline = handlerDelegate;
+        Func<Task<TResponse>> pipeline = handlerDelegate;
         foreach (var behaviorObj in resolvedBehaviors)
         {
             if (behaviorObj == null) continue;

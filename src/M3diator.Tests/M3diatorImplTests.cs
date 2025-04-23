@@ -1,5 +1,4 @@
 ﻿using FluentAssertions;
-using M3diator.Internal;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -41,13 +40,13 @@ public class M3diatorImplTests
         var mockHandler = new Mock<IRequestHandler<Ping, Pong>>();
         var mockBehavior = new Mock<IPipelineBehavior<Ping, Pong>>();
         mockHandler.Setup(h => h.Handle(request, It.IsAny<CancellationToken>())).ReturnsAsync(expectedResponse);
-        mockBehavior.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()))
-                  .Returns((Ping req, RequestHandlerDelegate<Pong> next, CancellationToken ct) => next());
+        mockBehavior.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()))
+                  .Returns((Ping req, Func<Task<Pong>> next, CancellationToken ct) => next());
         SetupHandlerResolution(mockHandler);
         SetupBehaviorResolution([mockBehavior.Object]);
         var response = await _mediator.Send(request);
         mockHandler.Verify(h => h.Handle(request, It.IsAny<CancellationToken>()), Times.Once);
-        mockBehavior.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockBehavior.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()), Times.Once);
         response.Should().Be(expectedResponse);
     }
 
@@ -66,13 +65,13 @@ public class M3diatorImplTests
                    .ReturnsAsync(expectedResponse)
                    .Callback(() => executionOrder.Add("Handler"));
 
-        mockBehavior1.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()))
+        mockBehavior1.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()))
                      .Callback(() => executionOrder.Add("Behavior1"))
-                     .Returns((Ping req, RequestHandlerDelegate<Pong> next, CancellationToken ct) => next());
+                     .Returns((Ping req, Func<Task<Pong>> next, CancellationToken ct) => next());
 
-        mockBehavior2.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()))
+        mockBehavior2.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()))
                      .Callback(() => executionOrder.Add("Behavior2"))
-                     .Returns((Ping req, RequestHandlerDelegate<Pong> next, CancellationToken ct) => next());
+                     .Returns((Ping req, Func<Task<Pong>> next, CancellationToken ct) => next());
 
         SetupHandlerResolution(mockHandler);
 
@@ -85,8 +84,8 @@ public class M3diatorImplTests
         executionOrder.Should().Equal("Behavior1", "Behavior2", "Handler");
         response.Should().BeEquivalentTo(expectedResponse);
         mockHandler.Verify(h => h.Handle(request, It.IsAny<CancellationToken>()), Times.Once);
-        mockBehavior1.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()), Times.Once);
-        mockBehavior2.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockBehavior1.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockBehavior2.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -114,10 +113,10 @@ public class M3diatorImplTests
 
         mockHandler.Setup(h => h.Handle(request, It.IsAny<CancellationToken>())).ReturnsAsync(new Pong("Not Called"));
 
-        mockBehavior1.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()))
-                     .Returns((Ping req, RequestHandlerDelegate<Pong> next, CancellationToken ct) => next());
+        mockBehavior1.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()))
+                     .Returns((Ping req, Func<Task<Pong>> next, CancellationToken ct) => next());
 
-        mockBehavior2.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()))
+        mockBehavior2.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()))
                      .ThrowsAsync(exception);
 
         SetupHandlerResolution(mockHandler);
@@ -128,8 +127,8 @@ public class M3diatorImplTests
         await _mediator.Invoking(m => m.Send(request))
                        .Should().ThrowExactlyAsync<InvalidOperationException>().WithMessage("Behavior Failed");
 
-        mockBehavior1.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()), Times.Once);
-        mockBehavior2.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockBehavior1.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockBehavior2.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), It.IsAny<CancellationToken>()), Times.Once);
         mockHandler.Verify(h => h.Handle(request, It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -225,12 +224,12 @@ public class M3diatorImplTests
         var mockHandler = new Mock<IRequestHandler<Ping, Pong>>();
         var mockBehavior = new Mock<IPipelineBehavior<Ping, Pong>>();
         mockHandler.Setup(h => h.Handle(request, token)).ReturnsAsync(new Pong("OK"));
-        mockBehavior.Setup(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), token)).Returns((Ping req, RequestHandlerDelegate<Pong> next, CancellationToken ct) => next());
+        mockBehavior.Setup(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), token)).Returns((Ping req, Func<Task<Pong>> next, CancellationToken ct) => next());
         SetupHandlerResolution(mockHandler);
         SetupBehaviorResolution([mockBehavior.Object]);
         await _mediator.Send(request, token);
         mockHandler.Verify(h => h.Handle(request, token), Times.Once);
-        mockBehavior.Verify(b => b.Handle(request, It.IsAny<RequestHandlerDelegate<Pong>>(), token), Times.Once);
+        mockBehavior.Verify(b => b.Handle(request, It.IsAny<Func<Task<Pong>>>(), token), Times.Once);
     }
 
     [Fact]

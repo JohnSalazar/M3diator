@@ -2,7 +2,6 @@
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Order;
 using BenchmarkDotNet.Running;
-using M3diator.Internal;
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.CompilerServices;
 
@@ -67,7 +66,7 @@ public class BenchNotificationHandler3 : INotificationHandler<BenchNotification>
 public class BenchPipelineBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+    public async Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Yield();
@@ -80,7 +79,7 @@ public class BenchPipelineBehavior<TRequest, TResponse> : IPipelineBehavior<TReq
 public class SecondBenchBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+    public async Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Yield();

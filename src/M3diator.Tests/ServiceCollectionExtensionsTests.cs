@@ -1,5 +1,4 @@
 ﻿using FluentAssertions;
-using M3diator.Services;
 using M3diator.Tests.TestAssemblyMarker;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
@@ -143,14 +142,14 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddOpenBehavior_NullType_ShouldThrowArgumentNullException()
     {
-        var config = new M3diatorServiceConfiguration();
+        var config = new M3diatorServiceConfigurationOptions();
         Assert.Throws<ArgumentNullException>("openBehaviorType", () => config.AddOpenBehavior(null!));
     }
 
     [Fact]
     public void AddOpenBehavior_NonGenericType_ShouldThrowArgumentException()
     {
-        var config = new M3diatorServiceConfiguration();
+        var config = new M3diatorServiceConfigurationOptions();
         var ex = Assert.Throws<ArgumentException>("openBehaviorType", () => config.AddOpenBehavior(typeof(string)));
         Assert.Contains("must be an open generic type definition", ex.Message);
     }
@@ -158,7 +157,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddOpenBehavior_ClosedGenericType_ShouldThrowArgumentException()
     {
-        var config = new M3diatorServiceConfiguration();
+        var config = new M3diatorServiceConfigurationOptions();
         var closedType = typeof(LoggingBehavior<TestRequest, TestResponse>);
         var ex = Assert.Throws<ArgumentException>("openBehaviorType", () => config.AddOpenBehavior(closedType));
         Assert.Contains("must be an open generic type definition", ex.Message);
@@ -168,7 +167,7 @@ public class ServiceCollectionExtensionsTests
     public void AddOpenBehavior_NotImplementingInterface_ShouldThrowArgumentException()
     {
         // Arrange
-        var config = new M3diatorServiceConfiguration();
+        var config = new M3diatorServiceConfigurationOptions();
         var invalidBehaviorType = typeof(List<>);
 
         // Act & Assert

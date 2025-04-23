@@ -6,7 +6,7 @@ namespace M3diator.Services;
 /// <summary>
 /// Configuration options for M3diator service registration.
 /// </summary>
-public class M3diatorServiceConfiguration
+internal class M3diatorServiceConfiguration
 {
     /// <summary>
     /// Gets the list of assemblies to scan for handlers and behaviors.

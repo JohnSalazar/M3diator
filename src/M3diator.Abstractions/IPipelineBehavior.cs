@@ -1,6 +1,4 @@
-﻿using M3diator.Internal;
-
-namespace M3diator;
+﻿namespace M3diator;
 
 /// <summary>
 /// Represents an operation that executes as part of a pipeline. Implement this interface to decorate handlers.
@@ -17,5 +15,5 @@ public interface IPipelineBehavior<in TRequest, TResponse>
     /// <param name="next">Awaitable delegate for the next action in the pipeline. Eventually this delegate represents the handler.</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Awaitable task returning the <typeparamref name="TResponse"/></returns>
-    Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken);
+    Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken);
 }
