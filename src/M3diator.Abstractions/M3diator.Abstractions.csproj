@@ -7,7 +7,7 @@
     <PackageId>M3diator.Abstractions</PackageId>
     <AssemblyName>M3diator.Abstractions</AssemblyName>
     <RootNamespace>M3diator.Abstractions</RootNamespace>
-    <Version>2.0.0</Version>
+    <Version>2.1.0</Version>
     <Authors>Joao Salazar</Authors>
     <Description>Abstraction of M3diator contracts</Description>
     <PackageTags>mediator;m3diator;abstraction;contracts;interface</PackageTags>
