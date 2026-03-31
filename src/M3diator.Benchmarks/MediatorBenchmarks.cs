@@ -110,8 +110,7 @@ public class BenchStreamRequestHandler : IStreamRequestHandler<BenchStreamReques
 [MemoryDiagnoser]
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
 [MarkdownExporterAttribute.GitHub]
-// [SimpleJob(RuntimeMoniker.Net80, baseline: true)]
-[SimpleJob(RuntimeMoniker.Net90)]
+[SimpleJob]
 public class MediatorBenchmarks
 {
     private IServiceProvider _providerSingleHandlerOneBehavior = null!;

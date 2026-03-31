@@ -1,4 +1,3 @@
-﻿using M3diator.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Reflection;
@@ -7,118 +6,100 @@ namespace M3diator.Internal;
 
 /// <summary>
 /// Handles scanning assemblies and registering M3diator handlers and behaviors.
-/// Encapsulates the registration logic to keep ServiceCollectionExtensions clean (SRP).
 /// </summary>
-internal sealed class HandlerRegister
+internal sealed class HandlerRegister(IServiceCollection services, M3diatorOptions config)
 {
-    private readonly IServiceCollection _services;
-    private readonly M3diatorServiceConfiguration _config;
+    private readonly IServiceCollection _services = services ?? throw new ArgumentNullException(nameof(services));
+    private readonly M3diatorOptions _config = config ?? throw new ArgumentNullException(nameof(config));
 
     private static readonly Type RequestHandlerInterface = typeof(IRequestHandler<,>);
     private static readonly Type NotificationHandlerInterface = typeof(INotificationHandler<>);
     private static readonly Type PipelineBehaviorInterface = typeof(IPipelineBehavior<,>);
     private static readonly Type StreamRequestHandlerInterface = typeof(IStreamRequestHandler<,>);
+    private static readonly Type StreamPipelineBehaviorInterface = typeof(IStreamPipelineBehavior<,>);
 
-    public HandlerRegister(IServiceCollection services, M3diatorServiceConfiguration config)
-    {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
-        _config = config ?? throw new ArgumentNullException(nameof(config));
-    }
+    private static readonly HashSet<Type> KnownInterfaces =
+    [
+        RequestHandlerInterface,
+        NotificationHandlerInterface,
+        PipelineBehaviorInterface,
+        StreamRequestHandlerInterface,
+        StreamPipelineBehaviorInterface
+    ];
 
     /// <summary>
-    /// Scans assemblies specified in the configuration and registers all found
-    /// IRequestHandler, INotificationHandler, and IPipelineBehavior implementations.
-    /// Uses a single pass approach and registers open generic pipeline behaviors.
+    /// Scans assemblies specified in the configuration and registers all found handlers and behaviors.
     /// </summary>
     public void RegisterHandlersAndBehaviors()
     {
         var typesToRegister = new List<RegistrationInfo>();
-        var openGenericPipelineBehaviorTypes = new List<Type>();
+        var openGenericBehaviors = new List<Type>();
+        var openGenericStreamBehaviors = new List<Type>();
 
         foreach (var assembly in _config.AssembliesToRegister.Distinct())
         {
             foreach (var typeInfo in assembly.DefinedTypes.Where(t => t.IsClass && !t.IsAbstract && !t.IsInterface))
             {
-                ScanType(typeInfo, typesToRegister, openGenericPipelineBehaviorTypes);
+                ScanType(typeInfo, typesToRegister, openGenericBehaviors, openGenericStreamBehaviors);
             }
         }
 
         RegisterFoundTypes(typesToRegister);
-        RegisterOpenGenericPipelineBehaviors(openGenericPipelineBehaviorTypes);
+        RegisterOpenGenericBehaviors(PipelineBehaviorInterface, openGenericBehaviors, _config.ExplicitlyRegisteredOpenBehaviors);
+        RegisterOpenGenericBehaviors(StreamPipelineBehaviorInterface, openGenericStreamBehaviors, _config.ExplicitlyRegisteredOpenStreamBehaviors);
     }
 
-    /// <summary>
-    /// Scans a single type for relevant M3diator interfaces and categorizes it for registration.
-    /// </summary>
-    private void ScanType(TypeInfo typeInfo, List<RegistrationInfo> typesToRegister, List<Type> openGenericPipelineBehaviors)
+    private static void ScanType(
+        TypeInfo typeInfo,
+        List<RegistrationInfo> typesToRegister,
+        List<Type> openGenericBehaviors,
+        List<Type> openGenericStreamBehaviors)
     {
         var interfaces = typeInfo.GetInterfaces();
 
-        if (typeInfo.IsGenericTypeDefinition &&
-            interfaces.Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == PipelineBehaviorInterface))
+        if (typeInfo.IsGenericTypeDefinition)
         {
-            openGenericPipelineBehaviors.Add(typeInfo.AsType());
+            if (interfaces.Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == PipelineBehaviorInterface))
+                openGenericBehaviors.Add(typeInfo.AsType());
+
+            if (interfaces.Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == StreamPipelineBehaviorInterface))
+                openGenericStreamBehaviors.Add(typeInfo.AsType());
+
             return;
         }
-
-        if (typeInfo.IsGenericTypeDefinition) return;
 
         foreach (var implementedInterface in interfaces)
         {
             if (!implementedInterface.IsGenericType) continue;
 
             var genericTypeDef = implementedInterface.GetGenericTypeDefinition();
-            var implementationType = typeInfo.AsType();
 
-            if (genericTypeDef == RequestHandlerInterface)
+            if (KnownInterfaces.Contains(genericTypeDef))
             {
-                typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
-            }
-            else if (genericTypeDef == NotificationHandlerInterface)
-            {
-                typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
-            }
-            else if (genericTypeDef == PipelineBehaviorInterface)
-            {
-                typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
-            }
-            else if (genericTypeDef == StreamRequestHandlerInterface)
-            {
-                typesToRegister.Add(new RegistrationInfo(implementedInterface, implementationType));
+                typesToRegister.Add(new RegistrationInfo(implementedInterface, typeInfo.AsType()));
             }
         }
     }
 
-    /// <summary>
-    /// Registers the categorized concrete handlers and closed behaviors.
-    /// </summary>
     private void RegisterFoundTypes(List<RegistrationInfo> typesToRegister)
     {
         foreach (var regInfo in typesToRegister)
         {
-            var descriptor = new ServiceDescriptor(regInfo.ServiceType, regInfo.ImplementationType, _config.Lifetime);
-            _services.Add(descriptor);
+            _services.Add(new ServiceDescriptor(regInfo.ServiceType, regInfo.ImplementationType, _config.Lifetime));
         }
     }
 
-    /// <summary>
-    /// Registers the found open generic pipeline behaviors (from scanning and explicit configuration).
-    /// </summary>
-    private void RegisterOpenGenericPipelineBehaviors(List<Type> scannedOpenGenericBehaviors)
+    private void RegisterOpenGenericBehaviors(Type interfaceType, List<Type> scannedBehaviors, List<Type> explicitBehaviors)
     {
-        var allOpenBehaviors = scannedOpenGenericBehaviors
-            .Concat(_config.ExplicitlyRegisteredOpenBehaviors)
-            .Distinct()
-            .ToList();
+        var allBehaviors = scannedBehaviors
+            .Concat(explicitBehaviors)
+            .Distinct();
 
-        foreach (var openBehaviorType in allOpenBehaviors)
+        foreach (var behaviorType in allBehaviors)
         {
-            _services.TryAddEnumerable(new ServiceDescriptor(PipelineBehaviorInterface, openBehaviorType, _config.Lifetime));
+            _services.TryAddEnumerable(new ServiceDescriptor(interfaceType, behaviorType, _config.Lifetime));
         }
     }
 
-    /// <summary>
-    /// Helper record to store registration details during the single scan pass.
-    /// </summary>
     private record RegistrationInfo(Type ServiceType, Type ImplementationType);
 }

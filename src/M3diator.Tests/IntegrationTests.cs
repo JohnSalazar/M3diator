@@ -329,6 +329,40 @@ public class IntegrationTests
     }
 
     [Fact]
+    public async Task CreateStream_Integration_WithStreamPipelineBehavior_ShouldExecuteBehavior()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var executionLog = new List<string>();
+        services.AddSingleton(executionLog);
+        services.AddLogging();
+
+        services.AddM3diator(cfg =>
+            cfg.RegisterServicesFromAssemblyContaining<IntegrationTests>()
+               .AddOpenStreamBehavior(typeof(PassThroughStreamBehavior<,>))
+               .WithLifetime(ServiceLifetime.Transient)
+        );
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+
+        var request = new StreamSequenceRequest(3, SimulateDelayMs: 0);
+        var receivedItems = new List<SequenceItem>();
+
+        // Act
+        await foreach (var item in mediator.CreateStream(request))
+        {
+            receivedItems.Add(item);
+        }
+
+        // Assert
+        receivedItems.Select(i => i.Value).Should().Equal(1, 2, 3);
+        executionLog.Should().Contain(PassThroughStreamBehavior<StreamSequenceRequest, SequenceItem>.CalledMarker);
+        executionLog.Should().Contain(StreamSequenceHandler.CalledMarker);
+    }
+
+    [Fact]
     public async Task CreateStream_Integration_UnregisteredHandler_ShouldThrow()
     {
         // Arrange

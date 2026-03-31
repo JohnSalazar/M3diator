@@ -1,1 +1,0 @@
-﻿global using M3diator;

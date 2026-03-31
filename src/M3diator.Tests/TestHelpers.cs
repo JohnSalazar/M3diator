@@ -25,6 +25,22 @@ namespace M3diator.Tests
     public class PassThroughBehavior<TRequest, TResponse>(List<string>? executionLog = null) : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { private readonly List<string>? _log = executionLog; public string Id { get; set; } = Guid.NewGuid().ToString("N")[..6]; public string Marker => $"PassThroughBehavior ({Id}) Executed"; public Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken) { _log?.Add(Marker); Console.WriteLine(Marker); return next(); } }
     public class FailingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { public const string CalledMarker = "FailingBehavior Executed - THROWING"; public const string ExceptionMessage = "Simulated pipeline failure"; public Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken) { Console.WriteLine(CalledMarker); throw new InvalidOperationException(ExceptionMessage); } }
     public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> { public const string MarkerBefore = "LoggingBehavior - Before"; public const string MarkerAfter = "LoggingBehavior - After"; public const string MarkerException = "LoggingBehavior - Exception"; private readonly List<string>? _logList; private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger; public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>>? logger = null, List<string>? executionLog = null) { _logger = logger ?? NullLogger<LoggingBehavior<TRequest, TResponse>>.Instance; _logList = executionLog; } public async Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken) { string requestTypeName = typeof(TRequest).Name; string beforeMessage = $"{MarkerBefore} {requestTypeName}"; _logList?.Add(beforeMessage); _logger.LogInformation("Handling request {RequestType}", requestTypeName); try { var response = await next().ConfigureAwait(false); string responseTypeName = typeof(TResponse).Name; string afterMessage = $"{MarkerAfter} {requestTypeName} -> {responseTypeName}"; _logList?.Add(afterMessage); _logger.LogInformation("Finished handling {RequestType}, returning {ResponseType}", requestTypeName, responseTypeName); return response; } catch (Exception ex) { string exceptionMessage = $"{MarkerException} {requestTypeName}: {ex.Message}"; _logList?.Add(exceptionMessage); _logger.LogError(ex, "Exception handling {RequestType}", requestTypeName); throw; } } }
+    public class PassThroughStreamBehavior<TRequest, TResponse>(List<string>? executionLog = null) : IStreamPipelineBehavior<TRequest, TResponse>
+        where TRequest : IStreamRequest<TResponse>
+    {
+        private readonly List<string>? _log = executionLog;
+        public const string CalledMarker = "PassThroughStreamBehavior Executed";
+
+        public async IAsyncEnumerable<TResponse> Handle(TRequest request, StreamHandlerDelegate<TResponse> next, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            _log?.Add(CalledMarker);
+            await foreach (var item in next().WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+        }
+    }
+
     public class StreamSequenceHandler(List<string>? executionLog = null) : IStreamRequestHandler<StreamSequenceRequest, SequenceItem>
     {
         private readonly List<string>? _log = executionLog;

@@ -1,43 +1,37 @@
-﻿namespace M3diator.Internal;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace M3diator.Internal;
 
 /// <summary>
-/// Base class for request handler wrappers. Used for non-generic access and caching.
+/// Base class for request handler wrappers. Stateless — resolves handlers from DI on each call.
 /// </summary>
 internal abstract class RequestHandlerBase
 {
-    /// <summary>
-    /// Handles the request.
-    /// </summary>
-    /// <param name="request">The request object (must be castable to the specific TRequest).</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task representing the asynchronous operation, containing the response object (must be castable to the specific TResponse).</returns>
-    internal abstract Task<object?> Handle(object request, CancellationToken cancellationToken);
+    internal abstract Task<object?> Handle(object request, IServiceProvider serviceProvider, CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Concrete wrapper for IRequestHandler&lt;TRequest, TResponse&gt;.
+/// Concrete stateless wrapper for IRequestHandler&lt;TRequest, TResponse&gt;.
+/// Resolves the handler and pipeline behaviors from DI on each invocation, respecting configured lifetimes.
 /// </summary>
-/// <typeparam name="TRequest">The type of the request.</typeparam>
-/// <typeparam name="TResponse">The type of the response.</typeparam>
-/// <remarks>
-/// Initializes a new instance of the <see cref="RequestHandlerWrapperImpl{TRequest, TResponse}"/> class.
-/// </remarks>
-/// <param name="innerHandler">The actual handler instance resolved from DI.</param>
-internal sealed class RequestHandlerWrapperImpl<TRequest, TResponse>(IRequestHandler<TRequest, TResponse> innerHandler) : RequestHandlerBase
+internal sealed class RequestHandlerWrapperImpl<TRequest, TResponse> : RequestHandlerBase
     where TRequest : IRequest<TResponse>
 {
-    private readonly IRequestHandler<TRequest, TResponse> _inner = innerHandler ?? throw new ArgumentNullException(nameof(innerHandler));
-
-    /// <summary>
-    /// Handles the specific request by casting the input object and calling the inner handler.
-    /// </summary>
-    /// <param name="requestObject">The request object.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task representing the asynchronous operation, containing the response object.</returns>
-    internal override async Task<object?> Handle(object requestObject, CancellationToken cancellationToken)
+    internal override async Task<object?> Handle(object request, IServiceProvider serviceProvider, CancellationToken cancellationToken)
     {
-        var result = await _inner.Handle((TRequest)requestObject, cancellationToken).ConfigureAwait(false);
+        var typedRequest = (TRequest)request;
+        var handler = serviceProvider.GetRequiredService<IRequestHandler<TRequest, TResponse>>();
+        var behaviors = serviceProvider.GetServices<IPipelineBehavior<TRequest, TResponse>>();
 
-        return result;
+        Func<Task<TResponse>> pipeline = () => handler.Handle(typedRequest, cancellationToken);
+
+        foreach (var behavior in behaviors.Reverse())
+        {
+            var next = pipeline;
+            var b = behavior;
+            pipeline = () => b.Handle(typedRequest, next, cancellationToken);
+        }
+
+        return await pipeline().ConfigureAwait(false);
     }
 }

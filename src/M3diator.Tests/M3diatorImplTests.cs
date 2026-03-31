@@ -348,7 +348,7 @@ public class M3diatorImplTests
     }
 
     [Fact]
-    public async Task Send_CalledTwice_ShouldHitCacheAndCallGetRequiredServiceOnce()
+    public async Task Send_CalledTwice_ShouldCacheWrapperButResolveHandlerEachTime()
     {
         // Arrange
         var request1 = new Ping("First Call");
@@ -362,14 +362,14 @@ public class M3diatorImplTests
         await _mediator.Send(request1);
         await _mediator.Send(request2);
 
-        // Assert
-        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IRequestHandler<Ping, Pong>)), Times.Once());
+        // Assert - handler is resolved per call (respects DI lifetime), wrapper type is cached
+        _serviceProviderMock.Verify(sp => sp.GetService(typeof(IRequestHandler<Ping, Pong>)), Times.Exactly(2));
         mockHandler.Verify(h => h.Handle(request1, It.IsAny<CancellationToken>()), Times.Once);
         mockHandler.Verify(h => h.Handle(request2, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task Publish_CalledTwice_ShouldHitCacheAndCallGetServicesOnce()
+    public async Task Publish_CalledTwice_ShouldCacheWrapperButResolveHandlersEachTime()
     {
         // Arrange
         var notification1 = new SpyNotification();
@@ -382,9 +382,9 @@ public class M3diatorImplTests
         await _mediator.Publish(notification1);
         await _mediator.Publish(notification2);
 
-        // Assert
+        // Assert - handlers are resolved per call (respects DI lifetime), wrapper type is cached
         var expectedEnumerableType = typeof(IEnumerable<>).MakeGenericType(typeof(INotificationHandler<SpyNotification>));
-        _serviceProviderMock.Verify(sp => sp.GetService(expectedEnumerableType), Times.Once());
+        _serviceProviderMock.Verify(sp => sp.GetService(expectedEnumerableType), Times.Exactly(2));
 
         mockHandler.Verify(h => h.Handle(It.IsAny<SpyNotification>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
@@ -450,7 +450,9 @@ public class M3diatorImplTests
         var request = new UnregisteredStreamRequest();
 
         _serviceProviderMock.Setup(sp => sp.GetService(typeof(IStreamRequestHandler<UnregisteredStreamRequest, int>)))
-                            .Returns(null);
+                            .Returns((object?)null);
+
+        SetupEmptyStreamBehaviors<UnregisteredStreamRequest, int>();
 
         // Act
         Func<Task> act = async () =>
@@ -537,9 +539,20 @@ public class M3diatorImplTests
              where TRequest : IStreamRequest<TResponse>
     {
         var handlerServiceType = typeof(IStreamRequestHandler<TRequest, TResponse>);
-
         _serviceProviderMock.Setup(sp => sp.GetService(handlerServiceType))
                             .Returns(handlerInstance);
+
+        SetupEmptyStreamBehaviors<TRequest, TResponse>();
+    }
+
+    private void SetupEmptyStreamBehaviors<TRequest, TResponse>()
+        where TRequest : IStreamRequest<TResponse>
+    {
+        var streamBehaviorType = typeof(IStreamPipelineBehavior<,>).MakeGenericType(typeof(TRequest), typeof(TResponse));
+        var enumerableType = typeof(IEnumerable<>).MakeGenericType(streamBehaviorType);
+        var emptyArray = Array.CreateInstance(streamBehaviorType, 0);
+        _serviceProviderMock.Setup(sp => sp.GetService(enumerableType))
+                            .Returns(emptyArray);
     }
 
     private static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(IEnumerable<T> source)

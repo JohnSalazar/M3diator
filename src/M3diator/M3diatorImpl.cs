@@ -1,24 +1,23 @@
-﻿using M3diator.Internal;
-using Microsoft.Extensions.DependencyInjection;
+using M3diator.Internal;
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace M3diator;
 
 /// <summary>
 /// Default implementation of IMediator, ISender and IPublisher.
-/// Handles request sending, notification publishing, and pipeline behavior execution.
-/// Implements caching for handler resolution to improve performance.
+/// Uses stateless cached wrappers that resolve handlers from DI on each call,
+/// correctly respecting configured service lifetimes (Transient, Scoped, Singleton).
 /// </summary>
-internal class M3diatorImpl : IMediator
+internal sealed class M3diatorImpl : IMediator
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly ConcurrentDictionary<Type, RequestHandlerBase> _requestHandlers = new();
-    private readonly ConcurrentDictionary<Type, List<NotificationHandlerWrapperBase>> _notificationHandlers = new();
-    private readonly ConcurrentDictionary<Type, StreamRequestHandlerBase> _streamRequestHandlers = new();
 
-    private static readonly ConcurrentDictionary<Type, MethodInfo> SendInternalMethodCache = new();
+    // Stateless wrapper caches — safe to be static because wrappers hold no state.
+    // They resolve handlers from IServiceProvider on each call.
+    private static readonly ConcurrentDictionary<Type, RequestHandlerBase> RequestWrappers = new();
+    private static readonly ConcurrentDictionary<Type, NotificationHandlerWrapperBase> NotificationWrappers = new();
+    private static readonly ConcurrentDictionary<Type, StreamRequestHandlerBase> StreamWrappers = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="M3diatorImpl"/> class.
@@ -31,95 +30,36 @@ internal class M3diatorImpl : IMediator
     }
 
     /// <inheritdoc />
-    public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return SendInternal(request, cancellationToken);
-    }
-
-    /// <summary>
-    /// Sends a request without a response (uses Unit).
-    /// </summary>
-    /// <param name="request">The request object implementing IRequest (implies IRequest&lt;Unit&gt;).</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Task.</returns>
-    public Task Send(IRequest request, CancellationToken cancellationToken = default)
+    public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return SendInternal<Unit>(request, cancellationToken);
+        var wrapper = GetOrCreateRequestWrapper(request.GetType(), typeof(TResponse));
+        var result = await wrapper.Handle(request, _serviceProvider, cancellationToken).ConfigureAwait(false);
+
+        if (typeof(TResponse) == typeof(Unit))
+            return default!;
+
+        return (TResponse)result!;
     }
 
     /// <inheritdoc />
-    public Task<object?> Send(object request, CancellationToken cancellationToken = default)
+    public Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var requestType = request.GetType();
-
-        var requestInterface = requestType.GetInterfaces()
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
-
-        Type responseType;
-        if (requestInterface == null)
-        {
-            if (request is IRequest)
-            {
-                responseType = typeof(Unit);
-            }
-            else
-            {
-                throw new ArgumentException($"Object '{requestType.FullName}' does not implement IRequest or IRequest<TResponse>.", nameof(request));
-            }
-        }
-        else
-        {
-            responseType = requestInterface.GetGenericArguments()[0];
-        }
-
-        static MethodInfo GetSendInternalMethod(Type respType) =>
-            typeof(M3diatorImpl)
-                .GetMethod(nameof(SendInternal), BindingFlags.NonPublic | BindingFlags.Instance)!
-                .MakeGenericMethod(respType);
-
-        var sendInternalMethod = SendInternalMethodCache.GetOrAdd(responseType, GetSendInternalMethod);
-
-        var taskResult = sendInternalMethod.Invoke(this, new object[] { request, cancellationToken });
-
-        return HandleTaskResult(taskResult, responseType);
+        return Send<Unit>(request, cancellationToken);
     }
 
-    private static async Task<object?> HandleTaskResult(object? taskObject, Type responseType)
+    /// <inheritdoc />
+    public async Task<object?> Send(object request, CancellationToken cancellationToken = default)
     {
-        if (taskObject is null) return null;
-        if (taskObject is not Task task) throw new InvalidOperationException("Expected a Task object.");
+        ArgumentNullException.ThrowIfNull(request);
 
-        await task.ConfigureAwait(false);
+        var requestType = request.GetType();
+        var responseType = GetResponseType(requestType);
+        var wrapper = GetOrCreateRequestWrapper(requestType, responseType);
 
-        if (responseType == typeof(Unit))
-        {
-            return Unit.Value;
-        }
-        else
-        {
-            try
-            {
-                var resultProperty = task.GetType().GetProperty("Result");
-                if (resultProperty == null)
-                {
-                    throw new InvalidOperationException($"Task type {task.GetType().FullName} did not contain a 'Result' property for response type {responseType.Name}.");
-                }
-                return resultProperty.GetValue(task);
-            }
-            catch (TargetInvocationException ex)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException ?? ex).Throw();
-                return null;
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"Failed to get result from task for response type {responseType.Name}.", ex);
-            }
-        }
+        return await wrapper.Handle(request, _serviceProvider, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -127,7 +67,9 @@ internal class M3diatorImpl : IMediator
         where TNotification : INotification
     {
         ArgumentNullException.ThrowIfNull(notification);
-        return PublishInternal(notification, cancellationToken);
+
+        var wrapper = GetOrCreateNotificationWrapper(notification.GetType());
+        return wrapper.Handle(notification, _serviceProvider, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -135,112 +77,27 @@ internal class M3diatorImpl : IMediator
     {
         ArgumentNullException.ThrowIfNull(notification);
 
-        if (notification is not INotification iNotification)
+        if (notification is not INotification)
         {
-            throw new ArgumentException($"Object '{notification.GetType().FullName}' does not implement INotification.", nameof(notification));
+            throw new ArgumentException(
+                $"Object '{notification.GetType().FullName}' does not implement INotification.",
+                nameof(notification));
         }
-        return PublishInternal(iNotification, cancellationToken);
+
+        var wrapper = GetOrCreateNotificationWrapper(notification.GetType());
+        return wrapper.Handle(notification, _serviceProvider, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<TResponse> CreateStream<TResponse>(
+        IStreamRequest<TResponse> request,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        await foreach (var item in CreateStreamInternal(request, cancellationToken).ConfigureAwait(false))
-        {
-            yield return item;
-        }
-    }
+        var wrapper = GetOrCreateStreamWrapper(request.GetType(), typeof(TResponse));
 
-    private async Task<TResponse> SendInternal<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken)
-    {
-        var requestType = request.GetType();
-
-        var handler = _requestHandlers.GetOrAdd(requestType, static (reqType, sp) =>
-        {
-            var handlerServiceType = typeof(IRequestHandler<,>).MakeGenericType(reqType, typeof(TResponse));
-            var handlerInstance = sp.GetRequiredService(handlerServiceType);
-            var wrapperType = typeof(RequestHandlerWrapperImpl<,>).MakeGenericType(reqType, typeof(TResponse));
-            var wrapper = (RequestHandlerBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
-            return wrapper;
-        }, _serviceProvider);
-
-        Func<Task<TResponse>> handlerDelegate = async () =>
-        {
-            object? result = await handler.Handle(request, cancellationToken).ConfigureAwait(false);
-            if (typeof(TResponse) == typeof(Unit)) { return default!; }
-            return (TResponse)result!;
-        };
-
-        var behaviorServiceType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(TResponse));
-        var resolvedBehaviors = _serviceProvider.GetServices(behaviorServiceType).Reverse();
-
-        Func<Task<TResponse>> pipeline = handlerDelegate;
-        foreach (var behaviorObj in resolvedBehaviors)
-        {
-            if (behaviorObj == null) continue;
-
-            var nextDelegate = pipeline;
-
-            pipeline = () => ((dynamic)behaviorObj).Handle((dynamic)request, nextDelegate, cancellationToken);
-        }
-
-        return await pipeline().ConfigureAwait(false);
-    }
-
-
-    private async Task PublishInternal(INotification notification, CancellationToken cancellationToken)
-    {
-        var notificationType = notification.GetType();
-        var handlers = _notificationHandlers.GetOrAdd(notificationType, static (notifType, sp) =>
-        {
-            var handlerServiceType = typeof(INotificationHandler<>).MakeGenericType(notifType);
-            var wrapperType = typeof(NotificationHandlerWrapperImpl<>).MakeGenericType(notifType);
-            var handlerInstances = sp.GetServices(handlerServiceType);
-            var wrappers = new List<NotificationHandlerWrapperBase>();
-            foreach (var handlerInstance in handlerInstances)
-            {
-                if (handlerInstance != null)
-                {
-                    var wrapper = (NotificationHandlerWrapperBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
-                    wrappers.Add(wrapper);
-                }
-            }
-            return wrappers;
-        }, _serviceProvider);
-
-        if (!handlers.Any()) { return; }
-
-        List<Exception>? exceptions = null;
-        foreach (var handler in handlers)
-        {
-            try { await handler.Handle(notification, cancellationToken).ConfigureAwait(false); }
-            catch (Exception ex) { exceptions ??= new List<Exception>(); exceptions.Add(ex); }
-        }
-
-        if (exceptions != null && exceptions.Count > 0)
-        {
-            throw new AggregateException($"One or more errors occurred while publishing notification '{notificationType.FullName}'", exceptions);
-        }
-    }
-
-    private async IAsyncEnumerable<TResponse> CreateStreamInternal<TResponse>(IStreamRequest<TResponse> request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        var requestType = request.GetType();
-
-        var streamHandlerWrapper = _streamRequestHandlers.GetOrAdd(requestType, static (reqType, sp) =>
-        {
-            var handlerServiceType = typeof(IStreamRequestHandler<,>).MakeGenericType(reqType, typeof(TResponse));
-            var handlerInstance = sp.GetRequiredService(handlerServiceType);
-            var wrapperType = typeof(StreamRequestHandlerWrapperImpl<,>).MakeGenericType(reqType, typeof(TResponse));
-            var wrapper = (StreamRequestHandlerBase)Activator.CreateInstance(wrapperType, handlerInstance)!;
-            return wrapper;
-        }, _serviceProvider);
-
-        var stream = streamHandlerWrapper.Handle(request, cancellationToken);
-
-        await foreach (var item in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
+        await foreach (var item in wrapper.Handle(request, _serviceProvider, cancellationToken).ConfigureAwait(false))
         {
             if (item is TResponse responseItem)
             {
@@ -252,8 +109,52 @@ internal class M3diatorImpl : IMediator
             }
             else
             {
-                throw new InvalidCastException($"Stream item of type {item?.GetType().FullName ?? "null"} could not be cast to target type {typeof(TResponse).FullName}.");
+                throw new InvalidCastException(
+                    $"Stream item of type {item?.GetType().FullName ?? "null"} could not be cast to target type {typeof(TResponse).FullName}.");
             }
         }
+    }
+
+    private static RequestHandlerBase GetOrCreateRequestWrapper(Type requestType, Type responseType)
+    {
+        return RequestWrappers.GetOrAdd(requestType, static (reqType, respType) =>
+        {
+            var wrapperType = typeof(RequestHandlerWrapperImpl<,>).MakeGenericType(reqType, respType);
+            return (RequestHandlerBase)Activator.CreateInstance(wrapperType)!;
+        }, responseType);
+    }
+
+    private static NotificationHandlerWrapperBase GetOrCreateNotificationWrapper(Type notificationType)
+    {
+        return NotificationWrappers.GetOrAdd(notificationType, static notifType =>
+        {
+            var wrapperType = typeof(NotificationHandlerWrapperImpl<>).MakeGenericType(notifType);
+            return (NotificationHandlerWrapperBase)Activator.CreateInstance(wrapperType)!;
+        });
+    }
+
+    private static StreamRequestHandlerBase GetOrCreateStreamWrapper(Type requestType, Type responseType)
+    {
+        return StreamWrappers.GetOrAdd(requestType, static (reqType, respType) =>
+        {
+            var wrapperType = typeof(StreamRequestHandlerWrapperImpl<,>).MakeGenericType(reqType, respType);
+            return (StreamRequestHandlerBase)Activator.CreateInstance(wrapperType)!;
+        }, responseType);
+    }
+
+    private static Type GetResponseType(Type requestType)
+    {
+        var requestInterface = requestType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
+
+        if (requestInterface is not null)
+            return requestInterface.GetGenericArguments()[0];
+
+        if (typeof(IRequest).IsAssignableFrom(requestType))
+            return typeof(Unit);
+
+        throw new ArgumentException(
+            $"Object '{requestType.FullName}' does not implement IRequest or IRequest<TResponse>.",
+            "request");
     }
 }

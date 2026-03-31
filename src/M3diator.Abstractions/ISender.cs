@@ -15,6 +15,14 @@ public interface ISender
     Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Asynchronously sends a void request to a single handler.
+    /// </summary>
+    /// <param name="request">The request object implementing IRequest (implies IRequest&lt;Unit&gt;).</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>A task that represents the send operation.</returns>
+    Task Send(IRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Asynchronously sends a request to a single handler (abstraction over Send).
     /// </summary>
     /// <param name="request">The request object.</param>
